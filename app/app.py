@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import app.model_utils as utils
+import model_utils as utils
 
 st.set_page_config(
     page_title="Credit Risk Intelligence",
@@ -89,7 +89,7 @@ with st.sidebar:
     )
 
     st.markdown(
-        "<div class='sidebar-footer'>© 2026 Data Mining Project v1.0</div>",
+        "<div class='sidebar-footer'>© 2026 Data Mining Project v3.0</div>",
         unsafe_allow_html=True
     )
 
@@ -356,6 +356,73 @@ if page == "Applicant Assessment":
                         if st.button("Approve", use_container_width=True):
                             st.session_state['applicant_states'][selected_id] = "Approved"
                             st.rerun()
+
+        # ==========================================
+        # NEW SECTION: DEEP DIVE ANALYSIS CHARTS
+        # ==========================================
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.subheader("Deep Dive Analysis")
+
+        chart_col1, chart_col2 = st.columns(2, gap="large")
+
+        # Chart 1: Payment History Trend
+        with chart_col1:
+            with st.container(border=True):
+                st.markdown("<p class='section-title'>Payment History Trend</p>", unsafe_allow_html=True)
+                st.markdown("<p class='history-desc'>Comparison of billed vs. paid amounts over the last 6 months.</p>", unsafe_allow_html=True)
+                
+                trend_df = utils.get_payment_trend(app_data)
+
+                fig_trend = go.Figure()
+                fig_trend.add_trace(go.Scatter(
+                    x=trend_df['Month'], y=trend_df['Billed Amount'],
+                    name="Billed Amount",
+                    line=dict(color="#94a3b8", width=3, dash="dot"),
+                    mode="lines+markers"
+                ))
+                fig_trend.add_trace(go.Scatter(
+                    x=trend_df['Month'], y=trend_df['Paid Amount'],
+                    name="Paid Amount",
+                    line=dict(color="#3b82f6", width=3),
+                    mode="lines+markers"
+                ))
+                
+                fig_trend.update_layout(
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    yaxis=dict(gridcolor='#e2e8f0', tickprefix="$"),
+                    xaxis=dict(showgrid=False)
+                )
+                st.plotly_chart(fig_trend, use_container_width=True, config={'displayModeBar': False})
+
+        # Chart 2: Risk Factors Analysis
+        with chart_col2:
+            with st.container(border=True):
+                st.markdown("<p class='section-title'>Risk Factors Analysis</p>", unsafe_allow_html=True)
+                st.markdown("<p class='history-desc'>Top 5 variables driving the current risk score.</p>", unsafe_allow_html=True)
+
+                factors_df = utils.get_risk_factors(app_data, model)
+
+                # Green for lowering risk, Red for increasing risk
+                colors = ['#ef4444' if val > 0 else '#22c55e' for val in factors_df['Contribution']]
+
+                fig_factors = go.Figure(go.Bar(
+                    x=factors_df['Contribution'],
+                    y=factors_df['Feature'],
+                    orientation='h',
+                    marker_color=colors,
+                    text=[f"+{v:.2f}" if v > 0 else f"{v:.2f}" for v in factors_df['Contribution']],
+                    textposition='auto'
+                ))
+                
+                fig_factors.update_layout(
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    xaxis=dict(showgrid=True, gridcolor='#e2e8f0', zeroline=True, zerolinecolor='#94a3b8'),
+                    yaxis=dict(showgrid=False)
+                )
+                st.plotly_chart(fig_factors, use_container_width=True, config={'displayModeBar': False})
 
 elif page == "Historical Context":
     st.title("Historical Context")
