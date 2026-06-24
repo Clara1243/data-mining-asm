@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import model_utils as utils
+from streamlit_option_menu import option_menu
 
 st.set_page_config(
     page_title="Credit Risk Intelligence",
@@ -82,14 +83,32 @@ with st.sidebar:
     st.markdown("<div class='spacer-md'></div>", unsafe_allow_html=True)
     st.markdown("<p class='menu-label'>Main Menu</p>", unsafe_allow_html=True)
 
-    page = st.radio(
-        "Navigation",
-        ["Applicant Assessment", "Historical Context"],
-        label_visibility="collapsed"
+    page = option_menu(
+        menu_title=None,
+        options=["Applicant Assessment", "Historical Context"],
+        icons=["person-vcard", "clock-history"], # Bootstrap icons
+        default_index=0,
+        styles={
+            "container": {"padding": "0!important", "background-color": "transparent", "border": "none"},
+            "icon": {"color": "var(--text-color)", "font-size": "16px"}, 
+            "nav-link": {
+                "font-size": "15px",
+                "text-align": "left",
+                "margin": "2px 0px",
+                "color": "var(--text-color)",
+                "border-radius": "8px",
+                "--hover-color": "rgba(128, 128, 128, 0.1)",
+            },
+            "nav-link-selected": {
+                "background-color": "#DDA705", 
+                "color": "white",
+                "font-weight": "600"
+            },
+        }
     )
 
     st.markdown(
-        "<div class='sidebar-footer'>© 2026 Data Mining Project v3.0</div>",
+        "<div class='sidebar-footer'>© 2026 Data Mining Project v3。1</div>",
         unsafe_allow_html=True
     )
 
@@ -265,14 +284,14 @@ if page == "Applicant Assessment":
                 if default_prob < 40:
                     risk_tag, risk_color = "LOW RISK", "#22c55e"
                 elif default_prob <= 70:
-                    risk_tag, risk_color = "MODERATE RISK", "#f59e0b"
+                    risk_tag, risk_color = "MODERATE RISK", "#eab308"
                 else:
                     risk_tag, risk_color = "HIGH RISK", "#ef4444"
 
                 fig = go.Figure(data=[go.Pie(
                     values=[default_prob, 100-default_prob],
                     hole=0.75,
-                    marker_colors=[risk_color, "#f1f5f9"],
+                    marker_colors=[risk_color, "rgba(128, 128, 128, 0.2)"], # <-- Changed here
                     textinfo='none',
                     hoverinfo='none',
                     direction='clockwise',
@@ -287,10 +306,10 @@ if page == "Applicant Assessment":
                         text=f"{default_prob:.1f}%",
                         x=0.5, y=0.5,
                         font_size=32,
-                        font_color="#1e293b",
                         showarrow=False
                     )]
                 )
+
                 st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
                 st.markdown(
@@ -377,7 +396,7 @@ if page == "Applicant Assessment":
                 fig_trend.add_trace(go.Scatter(
                     x=trend_df['Month'], y=trend_df['Billed Amount'],
                     name="Billed Amount",
-                    line=dict(color="#94a3b8", width=3, dash="dot"),
+                    line=dict(color="rgba(128, 128, 128, 0.6)", width=3, dash="dot"), # <-- Changed here
                     mode="lines+markers"
                 ))
                 fig_trend.add_trace(go.Scatter(
@@ -391,7 +410,7 @@ if page == "Applicant Assessment":
                     margin=dict(l=0, r=0, t=10, b=0),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                     plot_bgcolor='rgba(0,0,0,0)',
-                    yaxis=dict(gridcolor='#e2e8f0', tickprefix="$"),
+                    yaxis=dict(gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"),
                     xaxis=dict(showgrid=False)
                 )
                 st.plotly_chart(fig_trend, use_container_width=True, config={'displayModeBar': False})
@@ -419,7 +438,12 @@ if page == "Applicant Assessment":
                 fig_factors.update_layout(
                     margin=dict(l=0, r=0, t=10, b=0),
                     plot_bgcolor='rgba(0,0,0,0)',
-                    xaxis=dict(showgrid=True, gridcolor='#e2e8f0', zeroline=True, zerolinecolor='#94a3b8'),
+                    xaxis=dict(
+                        showgrid=True, 
+                        gridcolor='rgba(128, 128, 128, 0.2)', 
+                        zeroline=True, 
+                        zerolinecolor='rgba(128, 128, 128, 0.5)'
+                    ),
                     yaxis=dict(showgrid=False)
                 )
                 st.plotly_chart(fig_factors, use_container_width=True, config={'displayModeBar': False})

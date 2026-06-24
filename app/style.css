@@ -1,200 +1,212 @@
-/* =========================================
-   1. GLOBAL & BASE STYLES
-   ========================================= */
-.block-container {
-    padding-top: 2rem !important;
-    padding-bottom: 2rem !important;
+/* --- Brand & Typography --- */
+.brand-container { padding-bottom: 10px; }
+.brand-title { 
+    font-size: 1.8rem; 
+    font-weight: 700; 
+    color: var(--text-color); 
+    margin-bottom: 0px; 
 }
-
-.subtext {
-    color: #64748b;
-    font-size: 1.1rem;
-    margin-top: -15px;
-    margin-bottom: 25px;
+.brand-subtitle { 
+    font-size: 0.9rem; 
+    color: var(--text-color); 
+    opacity: 0.7;
+    margin-top: -5px; 
 }
-
-.section-title {
-    font-size: 1.25rem;
-    color: #64748b;
-    font-weight: 700;
-    text-transform: uppercase;
-    margin-top: 15px;
-    margin-bottom: 5px;
-    letter-spacing: 0.5px;
-}
-
-.section-title-sm {
-    font-size: 0.75rem;
-    color: #64748b;
-    font-weight: 700;
-    text-transform: uppercase;
-    margin-top: 15px;
-    margin-bottom: 5px;
-    letter-spacing: 0.5px;
-}
-
-/* =========================================
-   2. SIDEBAR & NAVIGATION
-   ========================================= */
-.brand-container {
-    text-align: left;
-    padding-left: 5px;
-    margin-bottom: 4rem;
-    padding-top: 2rem;
-}
-
-.brand-title {
-    color: #0f172a;
-    font-weight: 800;
-    margin: 0;
-    font-size: 2rem;
-    line-height: 1.1;
-}
-
-.brand-subtitle {
-    color: #64748b;
-    font-size: 0.8rem;
-    margin: 0;
-    font-weight: 500;
-}
-
-.spacer-md {
-    margin-bottom: 2.8rem;
-}
-
 .menu-label {
-    color: #94a3b8;
     font-size: 0.75rem;
-    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 1px;
+    color: var(--text-color);
+    opacity: 0.6;
+    font-weight: 600;
     margin-bottom: 10px;
 }
-
-[data-testid="stSidebar"] img {
-    pointer-events: none !important;
-}
-
 .sidebar-footer {
     position: fixed;
-    bottom: 25px;
-    left: 30px;
-    color: #94a3b8;
-    font-size: 0.8rem;
-    z-index: 100;
+    bottom: 20px;
+    font-size: 0.75rem;
+    color: var(--text-color);
+    opacity: 0.5;
 }
+.spacer-md { height: 25px; }
 
-/* Sidebar Text-Only Navigation */
-[data-testid="stSidebar"] [role="radiogroup"] label > div:first-child {
-    display: none !important;
-}
-
-[data-testid="stSidebar"] [role="radiogroup"] {
-    gap: 12px; 
-    padding: 0;
-}
-
-[data-testid="stSidebar"] [role="radiogroup"] label {
-    background-color: transparent !important;
-    padding: 0 !important;
-    cursor: pointer;
-}
-
-[data-testid="stSidebar"] [role="radiogroup"] label p {
-    font-size: 1.05rem !important;
-    font-weight: 600 !important;
-    color: #94a3b8 !important;
-    transition: color 0.2s ease;
-    margin: 0;
-}
-
-[data-testid="stSidebar"] [role="radiogroup"] label:hover p,
-[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) p {
-    color: #0f172a !important;
-}
-
-/* =========================================
-   3. DASHBOARD COMPONENTS
-   ========================================= */
-.custom-card {
-    background-color: #ffffff;
-    border-radius: 8px;
-    padding: 24px;
-    box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
-    border: 1px solid #e2e8f0;
+/* --- Headers --- */
+.section-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: inherit;
     margin-bottom: 15px;
-    transition: box-shadow 0.2s ease-in-out;
+    border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+    padding-bottom: 5px;
+}
+.section-title-sm {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: inherit;
+    margin-bottom: 8px;
 }
 
-.custom-card:hover {
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+/* --- Profile Data --- */
+.profile-item { margin-bottom: 15px; }
+.profile-label {
+    font-size: 0.8rem;
+    color: inherit;
+    opacity: 0.6;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.profile-value {
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: inherit;
+}
+.profile-value-lg {
+    font-size: 1.8rem;
+    font-weight: 700;
+    color: inherit;
+}
+.hr {
+    margin-top: 0.25;
+    margin-bottom: 0.25;
 }
 
-.profile-item { line-height: 1.4; margin-bottom: 15px; }
-.profile-label { color: #64748b; font-size: 1.0rem; font-weight: 600; }
-.profile-value { color: #1e293b; font-size: 1.0rem; font-weight: 700; }
-.profile-value-lg { color: #1e293b; font-size: 1.25rem; font-weight: 800; }
+/* --- History Cards --- */
+.history-desc {
+    font-size: 0.85rem;
+    color: inherit;
+    opacity: 0.7;
+    margin-bottom: 15px;
+    margin-top: -10px;
+}
+.history-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px; 
+    margin-bottom: 15px; 
+    padding-bottom: 5px;
+}
+.history-card {
+    background-color: rgba(128, 128, 128, 0.05); /* Adapts beautifully to both modes */
+    border: 1px solid rgba(128, 128, 128, 0.2);
+    border-radius: 6px;
+    padding: 10px;
+    text-align: center;
+}
+.history-label {
+    font-size: 0.75rem;
+    color: inherit;
+    opacity: 0.7;
+    margin-bottom: 5px;
+}
+.history-badge {
+    font-size: 0.8rem;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 12px;
+    display: inline-block;
+}
 
-.history-desc { font-size: 0.8rem; color: #64748b; margin-bottom: 15px; line-height: 1.4; }
-.history-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 10px; }
-.history-card { background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 16px 10px; margin-bottom: 1.5rem; border-radius: 8px; text-align: center; }
-.history-label { font-size: 0.75rem; color: #64748b; font-weight: 600; margin-bottom: 10px; text-transform: uppercase; }
-.history-badge { padding: 5px 12px; border-radius: 12px; font-weight: bold; font-size: 0.75rem; color: white; }
+/* Dynamic Badges */
+.badge-navy { background-color: #3b82f6; color: white; }
+.badge-gray { background-color: rgba(128, 128, 128, 0.15); color: inherit; }
+.badge-red { 
+    background-color: rgba(239, 68, 68, 0.15); /* Translucent red instead of solid white */
+    color: #ef4444; 
+    border: 1px solid rgba(239, 68, 68, 0.4); 
+}
 
-.badge-red { background-color: #ef4444; }
-.badge-navy { background-color: #1e293b; }
-.badge-gray { background-color: #94a3b8; }
-
-.risk-tag-container { text-align: center; margin-top: 15px; margin-bottom: 20px; }
-.risk-tag { background-color: #fee2e2; color: #ef4444; padding: 10px 16px; border-radius: 12px; font-weight: bold; font-size: 0.85rem; letter-spacing: 0.5px; }
-
-.baseline-container { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
-.baseline-banner { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-radius: 6px; }
-.baseline-left { display: flex; align-items: center; gap: 10px; }
-.baseline-dot { width: 8px; height: 8px; border-radius: 50%; }
-.baseline-title { font-size: 0.85rem; font-weight: 600; }
-.baseline-desc { font-weight: 400; }
-.baseline-threshold { font-size: 0.85rem; font-weight: 700; }
-
-.b-low { background-color: #f0fdf4; border: 1px solid #dcfce7; }
-.b-mod { background-color: #fffbeb; border: 1px solid #fef3c7; }
-.b-high { background-color: #fef2f2; border: 1px solid #fee2e2; }
-.c-green { color: #166534; }
-.c-orange { color: #92400e; }
-.c-red { color: #991b1b; }
+/* --- Risk Baselines --- */
+.baseline-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.baseline-banner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background-color: var(--secondary-background-color);
+    border: 1px solid rgba(128, 128, 128, 0.2);
+    border-radius: 6px;
+}
+.baseline-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.baseline-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
 .bg-green { background-color: #22c55e; }
-.bg-orange { background-color: #f59e0b; }
+.bg-orange { background-color: #eab308; }
 .bg-red { background-color: #ef4444; }
 
-.decision-title { margin-bottom: 0px; padding-bottom: 0px; font-size: 1.4rem; color: #1e293b; font-weight: 600;}
-.decision-desc { color: #64748b; font-size: 0.9rem; margin-top: 5px; }
+.baseline-title { font-size: 0.85rem; font-weight: 600; }
+.baseline-desc { font-weight: 400; opacity: 0.8; font-size: 0.75rem; }
+.baseline-threshold { font-size: 0.85rem; font-weight: 700; }
 
-.reject-marker, .approve-marker { display: none; }
+.c-green { color: #22c55e; }
+.c-orange { color: #eab308; }
+.c-red { color: #ef4444; }
 
+.b-low { border-left: 4px solid #22c55e; }
+.b-mod { border-left: 4px solid #eab308; }
+.b-high { border-left: 4px solid #ef4444; }
+
+/* --- Final Decision --- */
+.decision-title {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: var(--text-color);
+    margin-bottom: 5px;
+}
+.decision-desc {
+    font-size: 0.85rem;
+    color: var(--text-color);
+    opacity: 0.7;
+}
+
+.risk-tag-container {
+    display: flex;
+    justify-content: center;
+    margin-top: -15px;
+    margin-bottom: 15px;
+}
+.risk-tag {
+    font-size: 0.85rem;
+    font-weight: 700;
+    padding: 4px 12px;
+    border-radius: 16px;
+    letter-spacing: 0.5px;
+}
+
+/* --- Final Decision Action Buttons --- */
+
+/* Reject Button (Red) */
 div.element-container:has(.reject-marker) + div.element-container button {
     background-color: #ef4444 !important;
-    color: #ffffff !important;
-    border: none !important;
-    border-radius: 5px !important;
-    font-weight: bold !important;
-    transition: all 0.3s ease;
+    border-color: #ef4444 !important;
+    color: white !important;
+    transition: all 0.2s ease;
 }
 div.element-container:has(.reject-marker) + div.element-container button:hover {
     background-color: #dc2626 !important;
-    color: #ffffff !important;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    border-color: #dc2626 !important;
+    color: white !important;
 }
 
+/* Approve Button (Green) */
 div.element-container:has(.approve-marker) + div.element-container button {
     background-color: #22c55e !important;
-    color: #ffffff !important;
-    border: none !important;
-    border-radius: 5px !important;
-    font-weight: bold !important;
-    transition: all 0.3s ease;
+    border-color: #22c55e !important;
+    color: white !important;
+    transition: all 0.2s ease;
 }
 div.element-container:has(.approve-marker) + div.element-container button:hover {
     background-color: #16a34a !important;
-    color: #ffffff !important;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    border-color: #16a34a !important;
+    color: white !important;
 }

@@ -44,7 +44,7 @@
 ### 3. Install Dependencies
 
 ```bash
-    pip install streamlit pandas xgboost plotly openpyxl xlrd
+    pip install streamlit scikit-learn pandas xgboost plotly openpyxl xlrd streamlit-option-menu
 ```
 
 ## Running the Application
