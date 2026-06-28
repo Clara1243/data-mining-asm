@@ -1,7 +1,8 @@
 import streamlit as st
+import os
 import pandas as pd
 import plotly.graph_objects as go
-import model_utils as utils
+import app.model_utils as utils
 from streamlit_option_menu import option_menu
 
 st.set_page_config(
@@ -69,7 +70,14 @@ with st.sidebar:
     logo_col, text_col = st.columns([1, 3], vertical_alignment="center")
 
     with logo_col:
-        st.image("logo-removedbg.png", use_container_width=True)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        logo_path = os.path.join(current_dir, "logo-removedbg.png")
+        
+        if os.path.exists(logo_path):
+            st.image(logo_path, use_container_width=True)
+        else:
+            # Graceful fallback if the image is missing so the app doesn't crash
+            st.markdown("🔹")
 
     with text_col:
         st.markdown(
@@ -108,7 +116,7 @@ with st.sidebar:
     )
 
     st.markdown(
-        "<div class='sidebar-footer'>© 2026 Data Mining Project v4.0</div>",
+        "<div class='sidebar-footer'>© 2026 Data Mining Project v4.1</div>",
         unsafe_allow_html=True
     )
 
