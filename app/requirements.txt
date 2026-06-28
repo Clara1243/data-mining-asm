@@ -1,0 +1,9 @@
+streamlit
+pandas
+scikit-learn
+plotly
+openpyxl
+xlrd
+joblib
+shap
+streamlit-option-menu
