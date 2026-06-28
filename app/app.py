@@ -23,11 +23,11 @@ load_css("style.css")
 
 
 @st.cache_resource
-def get_model():
-    return utils.load_credit_model()
+def get_models():
+    return utils.load_credit_models()
 
+rf_model, yj_transformer = get_models()
 
-model = get_model()
 
 if 'dataset' not in st.session_state:
     st.session_state['dataset'] = None
@@ -108,7 +108,7 @@ with st.sidebar:
     )
 
     st.markdown(
-        "<div class='sidebar-footer'>© 2026 Data Mining Project v3。1</div>",
+        "<div class='sidebar-footer'>© 2026 Data Mining Project v3.2</div>",
         unsafe_allow_html=True
     )
 
@@ -279,7 +279,7 @@ if page == "Applicant Assessment":
             st.subheader("Default Risk Assessment")
 
             with st.container(border=True):
-                default_prob = utils.process_and_predict(app_data, model)
+                default_prob = utils.process_and_predict(app_data, rf_model, yj_transformer)
 
                 if default_prob < 40:
                     risk_tag, risk_color = "LOW RISK", "#22c55e"
@@ -421,7 +421,7 @@ if page == "Applicant Assessment":
                 st.markdown("<p class='section-title'>Risk Factors Analysis</p>", unsafe_allow_html=True)
                 st.markdown("<p class='history-desc'>Top 5 variables driving the current risk score.</p>", unsafe_allow_html=True)
 
-                factors_df = utils.get_risk_factors(app_data, model)
+                factors_df = utils.get_risk_factors(app_data, rf_model, yj_transformer)
 
                 # Green for lowering risk, Red for increasing risk
                 colors = ['#ef4444' if val > 0 else '#22c55e' for val in factors_df['Contribution']]
