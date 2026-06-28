@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import pandas as pd
 import plotly.graph_objects as go
-import app.model_utils as utils
+import model_utils as utils
 from streamlit_option_menu import option_menu
 
 st.set_page_config(
@@ -13,14 +13,14 @@ st.set_page_config(
 
 
 def load_css(file_name):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    css_path = os.path.join(current_dir, file_name)
+    
     try:
-        with open(file_name, encoding="utf-8") as f:
+        with open(css_path, encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
     except FileNotFoundError:
-        pass
-
-
-load_css("style.css")
+        st.error(f"UI Error: Could not find styling file at {css_path}")
 
 
 @st.cache_resource
