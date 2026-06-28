@@ -22,6 +22,7 @@ def load_css(file_name):
     except FileNotFoundError:
         st.error(f"UI Error: Could not find styling file at {css_path}")
 
+load_css("style.css")
 
 @st.cache_resource
 def get_models():
