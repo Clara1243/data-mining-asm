@@ -85,8 +85,8 @@ with st.sidebar:
 
     page = option_menu(
         menu_title=None,
-        options=["Applicant Assessment", "Historical Context"],
-        icons=["person-vcard", "clock-history"], # Bootstrap icons
+        options=["Applicant Assessment", "Applicant Archive", "Batch Analytics", "Engine Diagnostics"],
+        icons=["person-vcard", "archive", "cpu", "pie-chart"],
         default_index=0,
         styles={
             "container": {"padding": "0!important", "background-color": "transparent", "border": "none"},
@@ -108,7 +108,7 @@ with st.sidebar:
     )
 
     st.markdown(
-        "<div class='sidebar-footer'>© 2026 Data Mining Project v3.2</div>",
+        "<div class='sidebar-footer'>© 2026 Data Mining Project v4.0</div>",
         unsafe_allow_html=True
     )
 
@@ -191,11 +191,18 @@ if page == "Applicant Assessment":
             if state == "Pending"
         ]
 
-    applicant_list = ["Select an applicant..."] + [f"{app_id} (Pending)" for app_id in pending_applicants]
-    selected_option = st.selectbox("Applicant ID", options=applicant_list, label_visibility="collapsed")
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    if selected_option != "Select an applicant...":
+    # --- NEW QUEUE LOGIC ---
+    if st.session_state['dataset'] is not None and not pending_applicants:
+        # Graceful empty state when the queue is finished
+        st.success("🎉 All applicants in the current batch have been processed! Check the Archive tab for the ledger.")
+        
+    elif pending_applicants:
+        # We removed the "Select an applicant..." placeholder
+        applicant_list = [f"{app_id} (Pending)" for app_id in pending_applicants]
+        
+        # Because index defaults to 0, it ALWAYS auto-loads the next person in line
+        selected_option = st.selectbox("Applicant ID", options=applicant_list, label_visibility="collapsed")
+        st.markdown("<br>", unsafe_allow_html=True)
 
         selected_id = selected_option.split(" ")[0]
         df = st.session_state['dataset']
@@ -356,25 +363,29 @@ if page == "Applicant Assessment":
 
                 with text_col:
                     st.markdown("<h3 class='decision-title'>Final Decision</h3>", unsafe_allow_html=True)
-                    st.markdown(
-                        "<p class='decision-desc'>Review the risk score and make an approval determination.</p>",
-                        unsafe_allow_html=True
+
+                def submit_decision(app_id, decision):
+                    st.session_state['applicant_states'][app_id] = decision
+
+                action_col1, action_col2 = st.columns(2)
+
+                with action_col1:
+                    st.markdown("<div class='reject-marker'></div>", unsafe_allow_html=True)
+                    st.button(
+                        "Reject Application", 
+                        use_container_width=True,
+                        on_click=submit_decision,
+                        args=(selected_id, "Rejected") 
                     )
 
-                with action_col:
-                    btn_col1, btn_col2 = st.columns(2)
-
-                    with btn_col1:
-                        st.markdown('<div class="reject-marker"></div>', unsafe_allow_html=True)
-                        if st.button("Reject", use_container_width=True):
-                            st.session_state['applicant_states'][selected_id] = "Rejected"
-                            st.rerun()
-
-                    with btn_col2:
-                        st.markdown('<div class="approve-marker"></div>', unsafe_allow_html=True)
-                        if st.button("Approve", use_container_width=True):
-                            st.session_state['applicant_states'][selected_id] = "Approved"
-                            st.rerun()
+                with action_col2:
+                    st.markdown("<div class='approve-marker'></div>", unsafe_allow_html=True)
+                    st.button(
+                        "Approve Application", 
+                        use_container_width=True,
+                        on_click=submit_decision,
+                        args=(selected_id, "Approved")
+                    )
 
         # ==========================================
         # NEW SECTION: DEEP DIVE ANALYSIS CHARTS
@@ -423,7 +434,6 @@ if page == "Applicant Assessment":
 
                 factors_df = utils.get_risk_factors(app_data, rf_model, yj_transformer)
 
-                # Green for lowering risk, Red for increasing risk
                 colors = ['#ef4444' if val > 0 else '#22c55e' for val in factors_df['Contribution']]
 
                 fig_factors = go.Figure(go.Bar(
@@ -448,10 +458,317 @@ if page == "Applicant Assessment":
                 )
                 st.plotly_chart(fig_factors, use_container_width=True, config={'displayModeBar': False})
 
-elif page == "Historical Context":
-    st.title("Historical Context")
+elif page == "Applicant Archive":
+    st.title("Applicant Archive")
     st.markdown(
-        "<p class='subtext'>Macro-level visualization and association rules of historical credit data.</p>",
+        "<p class='subtext'>Historical ledger of all processed applicant decisions.</p>", 
         unsafe_allow_html=True
     )
-    st.info("Interactive visualizations (Plotly) and Association Rules will be implemented here.")
+    st.markdown("<hr/>", unsafe_allow_html=True)
+
+    if st.session_state['dataset'] is not None:
+        # 1. Identify applicants who are Approved or Rejected
+        processed_ids = [
+            app_id for app_id, status in st.session_state['applicant_states'].items() 
+            if status != "Pending"
+        ]
+        
+        if processed_ids:
+            # 2. Extract their data from the main dataset
+            df = st.session_state['dataset']
+            archive_df = df[df['ID'].isin(processed_ids)].copy()
+            
+            # 3. Attach their final decision status to the row
+            archive_df['Final Decision'] = archive_df['ID'].map(st.session_state['applicant_states'])
+            
+            # 4. Clean up the dataframe for the UI
+            display_cols = ['ID', 'AGE', 'SEX', 'EDUCATION', 'LIMIT_BAL', 'Final Decision']
+            display_df = archive_df[display_cols].copy()
+            
+            display_df['SEX'] = display_df['SEX'].apply(map_sex)
+            display_df['EDUCATION'] = display_df['EDUCATION'].apply(map_education)
+            
+            # 5. Render the sleek data table
+            if 'archive_page' not in st.session_state:
+                st.session_state['archive_page'] = 1
+
+            rows_per_page = 10
+            total_rows = len(display_df)
+            total_pages = max(1, (total_rows - 1) // rows_per_page + 1)
+
+            # Ensure current page doesn't exceed total pages (if filtering changes)
+            if st.session_state['archive_page'] > total_pages:
+                st.session_state['archive_page'] = total_pages
+
+            # 2. Slice the dataframe for the current page
+            start_idx = (st.session_state['archive_page'] - 1) * rows_per_page
+            end_idx = start_idx + rows_per_page
+            paginated_df = display_df.iloc[start_idx:end_idx]
+
+            # 3. Render the table with the sliced data
+            st.dataframe(
+                paginated_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "ID": st.column_config.TextColumn("Applicant ID"),
+                    "AGE": st.column_config.NumberColumn("Age"),
+                    "SEX": st.column_config.TextColumn("Gender"),
+                    "EDUCATION": st.column_config.TextColumn("Education"),
+                    "LIMIT_BAL": st.column_config.NumberColumn("Credit Limit", format="$%d"),
+                    "Final Decision": st.column_config.TextColumn("Decision Status")
+                }
+            )
+
+            # 4. Render Pagination Controls Below the Table
+            st.markdown("<div class='spacer-md'></div>", unsafe_allow_html=True)
+            prev_col, text_col, next_col = st.columns([1, 2, 1], vertical_alignment="center")
+            
+            with prev_col:
+                if st.button("< Previous", disabled=(st.session_state['archive_page'] == 1), use_container_width=True):
+                    st.session_state['archive_page'] -= 1
+                    st.rerun()
+            with text_col:
+                st.markdown(
+                    f"<div style='text-align: center; font-size: 0.9rem; opacity: 0.8;'>"
+                    f"Page <b>{st.session_state['archive_page']}</b> of <b>{total_pages}</b>"
+                    f"</div>", 
+                    unsafe_allow_html=True
+                )
+            with next_col:
+                if st.button("Next >", disabled=(st.session_state['archive_page'] == total_pages), use_container_width=True):
+                    st.session_state['archive_page'] += 1
+                    st.rerun()
+        else:
+            st.info("No applicants have been processed yet. Decisions made in the Assessment tab will appear here.")
+    else:
+        st.warning("Please upload a dataset in the Applicant Assessment tab to begin tracking history.")
+
+elif page == "Batch Analytics":
+    st.title("Batch Analytics")
+    st.markdown(
+        "<p class='subtext'>Macro-level demographic and financial analysis of the currently uploaded applicant batch.</p>",
+        unsafe_allow_html=True
+    )
+    st.markdown("<hr/>", unsafe_allow_html=True)
+
+    if st.session_state.get('dataset') is not None:
+        df = st.session_state['dataset']
+        
+        # --- Batch KPIs ---
+        total_applicants = len(df)
+        
+        # Safely force data to numeric, ignoring text or blank spaces
+        if 'AGE' in df.columns:
+            age_mean = pd.to_numeric(df['AGE'], errors='coerce').mean()
+            avg_age = int(age_mean) if pd.notna(age_mean) else 0
+        else:
+            avg_age = 0
+            
+        if 'LIMIT_BAL' in df.columns:
+            limit_mean = pd.to_numeric(df['LIMIT_BAL'], errors='coerce').mean()
+            avg_limit = limit_mean if pd.notna(limit_mean) else 0
+        else:
+            avg_limit = 0
+        
+        # Calculate how many have been processed vs pending
+        processed_count = sum(1 for status in st.session_state['applicant_states'].values() if status != "Pending")
+        completion_rate = (processed_count / total_applicants) * 100 if total_applicants > 0 else 0
+
+        st.markdown(f"""
+            <div class="kpi-grid">
+                <div class="kpi-card"><div class="kpi-label">Batch Size</div><div class="kpi-val">{total_applicants}</div></div>
+                <div class="kpi-card"><div class="kpi-label">Avg. Credit Limit</div><div class="kpi-val">${avg_limit:,.0f}</div></div>
+                <div class="kpi-card"><div class="kpi-label">Avg. Applicant Age</div><div class="kpi-val">{avg_age}</div></div>
+                <div class="kpi-card"><div class="kpi-label">Batch Completion</div><div class="kpi-val">{completion_rate:.1f}%</div></div>
+            </div>
+        """, unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # --- Dynamic Batch Visualizations ---
+        st.subheader("Batch Demographics")
+        chart_col1, chart_col2 = st.columns(2, gap="large")
+
+        with chart_col1:
+            with st.container(border=True):
+                st.markdown("<p class='section-title'>Gender Distribution</p>", unsafe_allow_html=True)
+                
+                # Safely map gender if the column exists
+                if 'SEX' in df.columns:
+                    gender_counts = df['SEX'].apply(map_sex).value_counts()
+                    
+                    fig_gender = go.Figure(data=[go.Pie(
+                        labels=gender_counts.index,
+                        values=gender_counts.values,
+                        hole=0.6,
+                        marker_colors=["#3b82f6", "rgba(128, 128, 128, 0.4)"]
+                    )])
+                    
+                    fig_gender.update_layout(
+                        height=250, margin=dict(l=0, r=0, t=10, b=0),
+                        showlegend=True, plot_bgcolor='rgba(0,0,0,0)'
+                    )
+                    st.plotly_chart(fig_gender, use_container_width=True, config={'displayModeBar': False})
+                else:
+                    st.info("Gender data not found in this batch.")
+
+        with chart_col2:
+            with st.container(border=True):
+                st.markdown("<p class='section-title'>Age Distribution</p>", unsafe_allow_html=True)
+                
+                if 'AGE' in df.columns:
+                    fig_age = go.Figure(data=[go.Histogram(
+                        x=df['AGE'],
+                        nbinsx=15,
+                        marker_color="#22c55e",
+                        opacity=0.8
+                    )])
+                    
+                    fig_age.update_layout(
+                        height=250, margin=dict(l=0, r=0, t=10, b=0),
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        yaxis=dict(showgrid=True, gridcolor='rgba(128, 128, 128, 0.2)', title="Count"),
+                        xaxis=dict(showgrid=False, title="Age")
+                    )
+                    st.plotly_chart(fig_age, use_container_width=True, config={'displayModeBar': False})
+                else:
+                    st.info("Age data not found in this batch.")
+
+        # --- Credit Limit vs Education ---
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("<p class='section-title'>Credit Exposure by Education Level</p>", unsafe_allow_html=True)
+            
+            if 'EDUCATION' in df.columns and 'LIMIT_BAL' in df.columns:
+                mapped_edu = df['EDUCATION'].apply(map_education)
+                
+                fig_box = go.Figure()
+                for edu_level in mapped_edu.unique():
+                    fig_box.add_trace(go.Box(
+                        y=df[mapped_edu == edu_level]['LIMIT_BAL'], 
+                        name=edu_level,
+                        boxpoints=False # Minimalist look
+                    ))
+                
+                fig_box.update_layout(
+                    height=350, margin=dict(l=0, r=0, t=10, b=0),
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    yaxis=dict(showgrid=True, gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"),
+                    xaxis=dict(showgrid=False),
+                    showlegend=False
+                )
+                st.plotly_chart(fig_box, use_container_width=True, config={'displayModeBar': False})
+            else:
+                st.info("Education or Credit Limit data not found in this batch.")
+
+    else:
+        # Empty state if they haven't uploaded an Excel file yet
+        st.warning("Please navigate to the **Applicant Assessment** tab and upload a batch dataset to view portfolio analytics.")
+
+elif page == "Engine Diagnostics":
+    st.title("Engine Diagnostics")
+    st.markdown(
+        "<p class='subtext'>Transparency and Explainable AI (XAI) for the core prediction engine.</p>", 
+        unsafe_allow_html=True
+    )
+    st.markdown("<hr/>", unsafe_allow_html=True)
+
+    col1, col2 = st.columns([1, 2], gap="large")
+
+    with col1:
+        st.subheader("Model Architecture")
+        st.info("**Pipeline:** Yeo-Johnson Transformer ➔ Random Forest Classifier")
+        
+        with st.container(border=True):
+            st.markdown("<p class='section-title'>Hyperparameters</p>", unsafe_allow_html=True)
+            params = utils.get_model_params(rf_model)
+            
+            for key, val in params.items():
+                st.markdown(
+                    f"<div class='profile-item'><span class='profile-label'>{key}</span><br>"
+                    f"<span class='profile-value' style='font-size: 1rem;'>{val}</span></div>",
+                    unsafe_allow_html=True
+                )
+
+    with col2:
+        st.subheader("Global Feature Importance")
+        with st.container(border=True):
+            st.markdown("<p class='section-title'>Top 10 Drivers of Default Risk</p>", unsafe_allow_html=True)
+            st.markdown(
+                "<p class='history-desc'>This chart displays the most influential variables the algorithm uses to evaluate risk across the entire applicant population.</p>", 
+                unsafe_allow_html=True
+            )
+            
+            importance_df = utils.get_global_feature_importance(rf_model)
+            
+            fig_global = go.Figure(go.Bar(
+                x=importance_df['Importance'],
+                y=importance_df['Feature'],
+                orientation='h',
+                marker_color='#3b82f6', # Sleek UI Blue
+                text=[f"{v:.3f}" for v in importance_df['Importance']],
+                textposition='auto'
+            ))
+            
+            fig_global.update_layout(
+                margin=dict(l=0, r=0, t=10, b=0),
+                plot_bgcolor='rgba(0,0,0,0)',
+                xaxis=dict(
+                    showgrid=True, 
+                    gridcolor='rgba(128, 128, 128, 0.2)',
+                    title="Relative Importance Weight"
+                ),
+                yaxis=dict(showgrid=False)
+            )
+            st.plotly_chart(fig_global, use_container_width=True, config={'displayModeBar': False})
+
+            # ==========================================
+    # NEW SECTION: THREAT MATRIX & KPIs
+    # ==========================================
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.subheader("Model Performance (Threat Matrix)")
+    st.markdown(
+        "<p class='history-desc'>Evaluating the engine's ability to balance False Positives (lost revenue) against False Negatives (financial loss) on the testing dataset.</p>",
+        unsafe_allow_html=True
+    )
+
+    kpis, cm = utils.get_model_metrics()
+
+    # 1. Render the Custom KPI Cards
+    st.markdown(f"""
+        <div class="kpi-grid">
+            <div class="kpi-card"><div class="kpi-label">Accuracy</div><div class="kpi-val">{kpis['Accuracy']}</div></div>
+            <div class="kpi-card"><div class="kpi-label">Precision</div><div class="kpi-val">{kpis['Precision']}</div></div>
+            <div class="kpi-card"><div class="kpi-label">Recall (Sensitivity)</div><div class="kpi-val">{kpis['Recall']}</div></div>
+            <div class="kpi-card"><div class="kpi-label">F1-Score</div><div class="kpi-val">{kpis['F1-Score']}</div></div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # 2. Render the Confusion Matrix Heatmap
+    with st.container(border=True):
+        st.markdown("<p class='section-title'>Confusion Matrix</p>", unsafe_allow_html=True)
+
+        # Reformat the 2D array for Plotly's bottom-to-top y-axis drawing
+        z_data = [cm[1], cm[0]] 
+
+        fig_cm = go.Figure(data=go.Heatmap(
+            z=z_data,
+            x=['Predicted: Paid', 'Predicted: Default'],
+            y=['Actual: Default', 'Actual: Paid'],
+            colorscale=[[0, 'rgba(128, 128, 128, 0.1)'], [1, '#3b82f6']],
+            text=[[f"<b>{v}</b>" for v in row] for row in z_data],
+            texttemplate="%{text}",
+            textfont={"size": 18, "color": "var(--text-color)"},
+            showscale=False,
+            hoverinfo="none"
+        ))
+
+        fig_cm.update_layout(
+            height=250,
+            margin=dict(l=0, r=0, t=10, b=0),
+            plot_bgcolor='rgba(0,0,0,0)',
+            xaxis=dict(side='bottom', showgrid=False, tickfont=dict(size=14)),
+            yaxis=dict(showgrid=False, tickfont=dict(size=14))
+        )
+
+        st.plotly_chart(fig_cm, use_container_width=True, config={'displayModeBar': False})

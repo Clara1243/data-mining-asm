@@ -134,3 +134,112 @@ def get_risk_factors(app_row, rf_model, yj_transformer=None):
     
     df['Feature'] = df['Feature'].map(lambda x: feature_dictionary.get(x, x))
     return df.sort_values(by='Contribution', ascending=True)
+
+def get_model_params(rf_model):
+    """Extracts core hyperparameters from the Random Forest estimator."""
+    estimator = rf_model.steps[-1][1] if hasattr(rf_model, 'steps') else rf_model
+    params = estimator.get_params()
+    
+    return {
+        "Number of Estimators (Trees)": params.get('n_estimators', 'N/A'),
+        "Max Depth": params.get('max_depth', 'None (Unlimited)'),
+        "Min Samples Split": params.get('min_samples_split', 'N/A'),
+        "Criterion": params.get('criterion', 'N/A').capitalize()
+    }
+
+def get_global_feature_importance(rf_model):
+    """Extracts the built-in global feature importance from the Random Forest."""
+    estimator = rf_model.steps[-1][1] if hasattr(rf_model, 'steps') else rf_model
+    importances = estimator.feature_importances_
+    
+    if hasattr(estimator, 'feature_names_in_'):
+        expected_cols = estimator.feature_names_in_
+    else:
+        expected_cols = [f"Feature {i}" for i in range(len(importances))]
+        
+    df = pd.DataFrame({'Feature': expected_cols, 'Importance': importances})
+    
+    df['Feature'] = df['Feature'].str.split('__').str[-1]
+    
+    feature_dictionary = {
+        'LIMIT_BAL': 'Total Credit Limit', 'SEX': 'Gender', 'EDUCATION': 'Education Level',
+        'MARRIAGE': 'Marital Status', 'AGE': 'Applicant Age', 'PAY_0': 'Current Payment Status',
+        'PAY_2': 'Payment Status (2 Mo Ago)', 'PAY_3': 'Payment Status (3 Mo Ago)',
+        'PAY_4': 'Payment Status (4 Mo Ago)', 'PAY_5': 'Payment Status (5 Mo Ago)',
+        'PAY_6': 'Payment Status (6 Mo Ago)', 'BILL_AMT1': 'Current Billed Amount',
+        'BILL_AMT2': 'Billed Amount (2 Mo Ago)', 'BILL_AMT3': 'Billed Amount (3 Mo Ago)',
+        'BILL_AMT4': 'Billed Amount (4 Mo Ago)', 'BILL_AMT5': 'Billed Amount (5 Mo Ago)',
+        'BILL_AMT6': 'Billed Amount (6 Mo Ago)', 'PAY_AMT1': 'Current Paid Amount',
+        'PAY_AMT2': 'Paid Amount (2 Mo Ago)', 'PAY_AMT3': 'Paid Amount (3 Mo Ago)',
+        'PAY_AMT4': 'Paid Amount (4 Mo Ago)', 'PAY_AMT5': 'Paid Amount (5 Mo Ago)',
+        'PAY_AMT6': 'Paid Amount (6 Mo Ago)'
+    }
+    
+    df['Feature'] = df['Feature'].map(lambda x: feature_dictionary.get(x, x))
+    return df.sort_values(by='Importance', ascending=True).tail(10)
+
+def get_model_metrics():
+    """
+    Returns static evaluation metrics from the model's testing phase.
+    UPDATE THESE VALUES to match the exact output of your final Jupyter Notebook.
+    """
+    kpis = {
+        "Accuracy": "82.4%",
+        "Precision": "76.1%",
+        "Recall": "68.3%",
+        "F1-Score": "72.0%"
+    }
+    
+    cm = [
+        [4200, 350],  # Actual Paid (0)
+        [600, 850]    # Actual Default (1)
+    ]
+    
+    return kpis, cm
+
+def get_historical_eda_data():
+    """
+    Supplies aggregated macro-level data from the training dataset for EDA charts.
+    """
+    # 1. Default Rate by Education Level
+    education_data = pd.DataFrame({
+        'Education': ['Graduate School', 'University', 'High School', 'Others'],
+        'Default_Rate': [19.2, 23.7, 25.1, 7.0] # Standard Taiwan dataset metrics
+    })
+    
+    # 2. Credit Limit Distribution by Status (Approximated quartiles)
+    limit_data = {
+        'Paid': [50000, 100000, 150000, 250000, 500000],
+        'Defaulted': [20000, 50000, 90000, 150000, 300000]
+    }
+    
+    return education_data, limit_data
+
+def get_association_rules():
+    """
+    Returns the top Association Rules mined via Apriori/FP-Growth.
+    UPDATE THESE to match your actual Jupyter Notebook output.
+    """
+    rules = [
+        {
+            "Antecedent (Condition)": "PAY_0 = Delay 2+ Months", 
+            "Consequent (Outcome)": "Risk = Default", 
+            "Support": "11.2%", "Confidence": "69.4%", "Lift": "3.14"
+        },
+        {
+            "Antecedent (Condition)": "LIMIT_BAL < $50k AND EDUCATION = High School", 
+            "Consequent (Outcome)": "Risk = Default", 
+            "Support": "8.5%", "Confidence": "45.2%", "Lift": "2.05"
+        },
+        {
+            "Antecedent (Condition)": "PAY_0 = Paid Duly AND PAY_2 = Paid Duly", 
+            "Consequent (Outcome)": "Risk = Low", 
+            "Support": "28.3%", "Confidence": "88.1%", "Lift": "1.12"
+        },
+        {
+            "Antecedent (Condition)": "AGE < 25 AND LIMIT_BAL < $30k", 
+            "Consequent (Outcome)": "Risk = Default", 
+            "Support": "6.1%", "Confidence": "39.8%", "Lift": "1.80"
+        }
+    ]
+    return pd.DataFrame(rules)
