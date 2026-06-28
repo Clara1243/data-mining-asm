@@ -2,7 +2,7 @@ import streamlit as st
 import os
 import pandas as pd
 import plotly.graph_objects as go
-import app.model_utils as utils
+import model_utils as utils
 from streamlit_option_menu import option_menu
 
 st.set_page_config(
