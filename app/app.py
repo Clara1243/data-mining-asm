@@ -498,7 +498,14 @@ if page == "Applicant Assessment":
                     st.markdown("<h3 class='decision-title'>Final Decision</h3>", unsafe_allow_html=True)
 
                 def submit_decision(app_id, decision):
-                    st.session_state['applicant_states'][app_id] = decision
+                    # 1. Force state mutation recognition by reassigning the whole dictionary
+                    updated_states = st.session_state['applicant_states'].copy()
+                    updated_states[app_id] = decision
+                    st.session_state['applicant_states'] = updated_states
+                    
+                    # 2. Provide immediate visual confirmation
+                    icon = "✅" if decision == "Approved" else "🚫"
+                    st.toast(f"Decision saved: Applicant {app_id} {decision}!", icon=icon)
 
                 action_col1, action_col2 = st.columns(2)
 
