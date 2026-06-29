@@ -297,19 +297,15 @@ if page == "Applicant Assessment":
             st.session_state.get("dataset") is not None
             and st.session_state.get("applicant_states")
         ):
-            export_data = [
-                {"Applicant ID": k, "State": v}
-                for k, v in st.session_state["applicant_states"].items()
-            ]
-            csv_buffer = pd.DataFrame(export_data).to_csv(index=False).encode("utf-8")
 
-            st.download_button(
-                label="📥 Export Results",
-                data=csv_buffer,
-                file_name="applicant_decisions.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
+            # --- Macro-Level Progress Tracking ---
+            if st.session_state["dataset"] is not None:
+                total_apps = len(st.session_state["dataset"])
+                processed_apps = sum(1 for state in st.session_state["applicant_states"].values() if state != "Pending")
+                progress_pct = int((processed_apps / total_apps) * 100) if total_apps > 0 else 0
+                
+                st.progress(progress_pct, text=f"Batch Progress: {processed_apps} / {total_apps} Processed ({progress_pct}%)")
+                st.markdown("<br>", unsafe_allow_html=True)
 
     # --- Applicant queue ---
     st.markdown("##### Select Applicant from Queue:")
@@ -634,7 +630,6 @@ elif page == "Applicant Archive":
         "<p class='subtext'>Immutable Point-in-Time (PiT) audit ledger of processed applications.</p>",
         unsafe_allow_html=True,
     )
-    st.markdown("<hr/>", unsafe_allow_html=True)
 
     if st.session_state.get("dataset") is not None:
         processed_data = {
@@ -646,10 +641,6 @@ elif page == "Applicant Archive":
         if processed_data:
             df = st.session_state["dataset"]
             id_col = st.session_state["id_column"]
-
-            # ----------------------------------------------------------------
-            # Summary table
-            # ----------------------------------------------------------------
             summary_rows = []
             for app_id, audit in processed_data.items():
                 is_override = (
@@ -665,11 +656,34 @@ elif page == "Applicant Archive":
                     "Model Score": f"{audit['Score']}% ({audit['Risk_Tier']})",
                     "Final Decision": audit["Decision"],
                     "Delta Flag": "⚠️ OVERRIDE" if is_override else "✅ Aligned",
+                    "Risk_Tier_Raw": audit["Risk_Tier"], # Hidden column for accurate filtering
                 })
 
             summary_df = pd.DataFrame(summary_rows)
+
+            filter_option = st.radio(
+                "Filter Applications:",
+                options=[
+                    "All Records", 
+                    "Overrides Only", 
+                    "High-Risk Approvals", 
+                    "Low-Risk Rejections"
+                ],
+                horizontal=True,
+                label_visibility="collapsed"
+            )
+
+            if filter_option == "Overrides Only":
+                summary_df = summary_df[summary_df["Delta Flag"] == "OVERRIDE"]
+            elif filter_option == "High-Risk Approvals":
+                summary_df = summary_df[(summary_df["Final Decision"] == "Approved") & (summary_df["Risk_Tier_Raw"] == "HIGH RISK")]
+            elif filter_option == "Low-Risk Rejections":
+                summary_df = summary_df[(summary_df["Final Decision"] == "Rejected") & (summary_df["Risk_Tier_Raw"] == "LOW RISK")]
+
+            display_df = summary_df.drop(columns=["Risk_Tier_Raw"])
+
             st.dataframe(
-                summary_df,
+                display_df,
                 use_container_width=True,
                 hide_index=True,
                 column_config={
@@ -678,60 +692,102 @@ elif page == "Applicant Archive":
             )
 
             # ----------------------------------------------------------------
-            # Detailed audit log cards
+            # Audit Log Inspection
             # ----------------------------------------------------------------
             st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("<h4>Detailed Audit Logs</h4>", unsafe_allow_html=True)
+            st.markdown("<h4>Detailed Audit Log Inspector</h4>", unsafe_allow_html=True)
             st.markdown(
-                "<p class='subtext' style='margin-top:-8px;'>Full point-in-time record for each processed application. Frozen at the moment of decision.</p>",
+                "<p class='subtext' style='margin-top:-8px;'>Select a specific applicant to view their frozen point-in-time record. <b>Click the dropdown and type to search.</b></p>",
                 unsafe_allow_html=True,
             )
 
-            for app_id, audit in processed_data.items():
-                decision    = audit["Decision"]
-                score       = audit["Score"]
-                risk_tier   = audit["Risk_Tier"]
-                timestamp   = audit.get("Timestamp", "—")
+            processed_ids = list(processed_data.keys())
+            
+            if "audit_index" not in st.session_state:
+                st.session_state.audit_index = 0
+                
+            if st.session_state.audit_index >= len(processed_ids):
+                st.session_state.audit_index = 0
+
+            def go_prev():
+                if st.session_state.audit_index > 0:
+                    st.session_state.audit_index -= 1
+                    st.session_state.audit_selectbox = processed_ids[st.session_state.audit_index]
+
+            def go_next():
+                if st.session_state.audit_index < len(processed_ids) - 1:
+                    st.session_state.audit_index += 1
+                    st.session_state.audit_selectbox = processed_ids[st.session_state.audit_index]
+
+            def sync_selector():
+                st.session_state.audit_index = processed_ids.index(st.session_state.audit_selectbox)
+
+            selected_audit_id = st.selectbox(
+                "Search or Select Applicant ID:",
+                options=processed_ids,
+                index=st.session_state.audit_index,
+                key="audit_selectbox",
+                on_change=sync_selector,
+                label_visibility="collapsed"
+            )
+
+            if selected_audit_id:
+                app_id = selected_audit_id
+                audit = processed_data[app_id]
+                
+                raw_row = df[df[id_col].astype(str) == str(app_id)].iloc[0]
+                
+                decision      = audit["Decision"]
+                score         = audit["Score"]
+                risk_tier     = audit["Risk_Tier"]
+                timestamp     = audit.get("Timestamp", "—")
                 justification = audit["Justification"]
-                top_drivers = audit["Top_Drivers"]
-                pit         = audit["PiT_History"]
+                top_drivers   = audit["Top_Drivers"]
+                pit           = audit["PiT_History"]
+                
+                is_override = (
+                    (decision == "Approved" and risk_tier == "HIGH RISK") or 
+                    (decision == "Rejected" and risk_tier == "LOW RISK")
+                )
 
-                delta_flag  = summary_df[summary_df["Applicant ID"] == app_id]["Delta Flag"].values[0]
-                is_override = "OVERRIDE" in delta_flag
-
-                # Decide card accent colour from decision
                 if decision == "Approved":
                     accent      = "#22c55e"
-                    decision_bg = "rgba(34,197,94,0.08)"
                     badge_cls   = "audit-badge-approved"
                 else:
                     accent      = "#ef4444"
-                    decision_bg = "rgba(239,68,68,0.08)"
                     badge_cls   = "audit-badge-rejected"
 
-                # Risk tier colour
                 tier_color = {"LOW RISK": "#22c55e", "MODERATE RISK": "#eab308", "HIGH RISK": "#ef4444"}.get(risk_tier, "#888")
 
-                # Payment history rows
-                pit_labels = {
-                    "PAY_0": "Current",
-                    "PAY_2": "Month −2",
-                    "PAY_3": "Month −3",
-                    "PAY_4": "Month −4",
-                    "PAY_5": "Month −5",
-                    "PAY_6": "Month −6",
-                }
-                pit_rows_html = "".join(
-                    f"<div class='audit-pit-row'>"
-                    f"<span class='audit-pit-label'>{lbl}</span>"
-                    f"<span class='audit-pit-val'>{pit.get(col, 'N/A')}</span>"
-                    f"</div>"
-                    for col, lbl in pit_labels.items()
-                )
+                pit_cols_chronological = ["PAY_6", "PAY_5", "PAY_4", "PAY_3", "PAY_2", "PAY_0"]
+                timeline_bars = ""
+                
+                for col in pit_cols_chronological:
+                    val = int(pit.get(col, 0))
+                    if val == -2:
+                        bar_color = "#9ca3af" 
+                        bar_height = "15px"
+                    elif val <= 0:
+                        bar_color = "#22c55e"
+                        bar_height = "20px"
+                    else:
+                        bar_color = "#ef4444"
+                        bar_height = f"{min(20 + (val * 4), 40)}px"
+                        
+                    timeline_bars += f"<div title='{col}: {val}' style='flex:1; background-color:{bar_color}; height:{bar_height}; border-radius:3px; transition: height 0.2s ease;'></div>"
 
-                # XAI driver pills
+                timeline_html = f"""
+<div style='display:flex; gap:6px; align-items:flex-end; height:45px; padding-bottom:5px;'>
+{timeline_bars}
+</div>
+<div style='display:flex; justify-content:space-between; font-size:0.65rem; font-weight:600; opacity:0.5; text-transform:uppercase;'>
+<span>6 Mo Ago</span>
+<span>Current</span>
+</div>
+"""
+
                 driver_pills_html = "".join(
-                    f"<span class='audit-driver-pill'>{d}</span>"
+                    f"<div class='audit-driver-pill' style='display:block; margin-bottom:6px; text-align:center;'>{d}</div>"
                     for d in top_drivers
                 )
 
@@ -742,52 +798,63 @@ elif page == "Applicant Archive":
                 )
 
                 st.markdown(f"""
-                <div class="audit-card" style="border-left: 4px solid {accent};">
+<div class="audit-card" style="border-left: 4px solid {accent};">
+<div class="audit-card-header">
+<div class="audit-header-left">
+<span class="audit-app-id">{app_id}</span>
+<span class="audit-badge {badge_cls}">{decision}</span>
+{('<span class="audit-override-pill">Override</span>' if is_override else '')}
+</div>
+<div class="audit-header-right">
+<span class="audit-timestamp">🕒 {timestamp}</span>
+</div>
+</div>
+{override_banner}
+<div class="audit-card-body">
+<div class="audit-section">
+<div class="audit-section-label">MODEL ASSESSMENT</div>
+<div class="audit-score-val" style="color:{accent};">{score}%</div>
+<div class="audit-tier-pill" style="color:{tier_color}; border-color:{tier_color}40; background:{tier_color}10;">
+{risk_tier}
+</div>
+</div>
+<div class="audit-section audit-section-mid">
+<div class="audit-section-label">TOP RISK DRIVERS</div>
+<div>{driver_pills_html}</div>
+<div class="audit-section-label" style="margin-top:16px;">OPERATOR JUSTIFICATION</div>
+<div class="audit-justification">"{justification}"</div>
+</div>
+<div class="audit-section">
+<div class="audit-section-label">PAYMENT TRAJECTORY</div>
+{timeline_html}
+</div>
+</div>
+</div>
+""", unsafe_allow_html=True)
+                    
+                st.markdown("<br>", unsafe_allow_html=True)
+                nav_col1, nav_col2, nav_col3 = st.columns([1, 4, 1])
+                
+                with nav_col1:
+                    st.button(
+                        "⬅ Previous", 
+                        on_click=go_prev, 
+                        disabled=(st.session_state.audit_index == 0),
+                        use_container_width=True
+                    )
+                    
+                with nav_col3:
+                    st.button(
+                        "Next ➡", 
+                        on_click=go_next, 
+                        disabled=(st.session_state.audit_index == len(processed_ids) - 1),
+                        use_container_width=True
+                    )
 
-                    <!-- Header row -->
-                    <div class="audit-card-header">
-                        <div class="audit-header-left">
-                            <span class="audit-app-id">{app_id}</span>
-                            <span class="audit-badge {badge_cls}">{decision}</span>
-                            {('<span class="audit-override-pill">Override</span>' if is_override else '')}
-                        </div>
-                        <div class="audit-header-right">
-                            <span class="audit-timestamp">🕒 {timestamp}</span>
-                        </div>
-                    </div>
-
-                    {override_banner}
-
-                    <!-- Body: three columns -->
-                    <div class="audit-card-body">
-
-                        <!-- Col 1: Score & Risk -->
-                        <div class="audit-section">
-                            <div class="audit-section-label">MODEL ASSESSMENT</div>
-                            <div class="audit-score-val" style="color:{accent};">{score}%</div>
-                            <div class="audit-tier-pill" style="color:{tier_color}; border-color:{tier_color}40; background:{tier_color}10;">
-                                {risk_tier}
-                            </div>
-                        </div>
-
-                        <!-- Col 2: XAI Drivers -->
-                        <div class="audit-section audit-section-mid">
-                            <div class="audit-section-label">TOP RISK DRIVERS</div>
-                            <div class="audit-drivers-wrap">{driver_pills_html}</div>
-                            <div class="audit-section-label" style="margin-top:14px;">OPERATOR JUSTIFICATION</div>
-                            <div class="audit-justification">"{justification}"</div>
-                        </div>
-
-                        <!-- Col 3: PiT History -->
-                        <div class="audit-section">
-                            <div class="audit-section-label">POINT-IN-TIME HISTORY</div>
-                            <div class="audit-pit-grid">{pit_rows_html}</div>
-                        </div>
-
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-
+                st.markdown("<br>", unsafe_allow_html=True)
+                with st.expander("🔍 View Raw Application Data"):
+                    st.dataframe(raw_row.to_frame().T, use_container_width=True, hide_index=True)
+                
         else:
             st.info("No applicants have been processed yet. Decisions made in the Assessment tab will appear here.")
     else:
