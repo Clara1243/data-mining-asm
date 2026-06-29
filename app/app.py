@@ -48,6 +48,55 @@ def map_education(val):
     }
     return mapping.get(val, "Unknown")
 
+def clean_dataset_headers(df):
+    """Smart detection and cleaning of staggered or duplicate CSV headers."""
+    if df.empty:
+        return df
+        
+    def safe_convert_to_numeric(dataframe):
+        """Safely forces numbers to numeric types but leaves text columns alone."""
+        for col in dataframe.columns:
+            try:
+                dataframe[col] = pd.to_numeric(dataframe[col])
+            except ValueError:
+                pass
+        return dataframe
+
+    # 1. Check for a Duplicate Header (e.g., Column is 'ID', Row 0 is also 'ID')
+    if all(str(c).strip() == str(v).strip() for c, v in zip(df.columns, df.iloc[0])):
+        df = df.iloc[1:].reset_index(drop=True)
+        return safe_convert_to_numeric(df)
+        
+    # 2. Check for Staggered Headers (e.g., Columns are 'X1', 'X2', Row 0 is 'LIMIT_BAL')
+    first_row_values = df.iloc[0].astype(str).str.strip().str.upper().values
+    
+    if 'LIMIT_BAL' in first_row_values or 'ID' in first_row_values or 'AGE' in first_row_values:
+        # Promote row 0 to be the actual column names
+        df.columns = df.iloc[0].astype(str).str.strip() 
+        df = df.iloc[1:].reset_index(drop=True)
+        
+        df = safe_convert_to_numeric(df)
+        
+    return df
+
+def detect_id_column(df):
+    """Smart detection of the primary key / ID column in an uploaded dataset."""
+    # 1. Look for obvious standard names (Case Insensitive)
+    known_id_names = ['id', 'clientnum', 'client_id', 'customer_id', 'applicant_id', 'ref_no']
+    for col in df.columns:
+        if str(col).lower() in known_id_names:
+            return col
+            
+    # 2. Look for columns containing 'id' or 'num' that are 100% unique
+    for col in df.columns:
+        if ('id' in str(col).lower() or 'num' in str(col).lower()) and df[col].nunique() == len(df):
+            return col
+            
+    # 3. Fallback: If the very first column has completely unique values, assume it's the ID
+    if df.iloc[:, 0].nunique() == len(df):
+        return df.columns[0]
+        
+    return None # Return None if no valid ID column is found
 
 def map_marriage(val):
     mapping = {1: "Married", 2: "Single", 3: "Others"}
@@ -77,7 +126,6 @@ with st.sidebar:
         if os.path.exists(logo_path):
             st.image(logo_path, use_container_width=True)
         else:
-            # Graceful fallback if the image is missing so the app doesn't crash
             st.markdown("🔹")
 
     with text_col:
@@ -117,7 +165,7 @@ with st.sidebar:
     )
 
     st.markdown(
-        "<div class='sidebar-footer'>© 2026 Data Mining Project v4.1</div>",
+        "<div class='sidebar-footer'>© 2026 Data Mining Project v4.2</div>",
         unsafe_allow_html=True
     )
 
@@ -133,7 +181,35 @@ if page == "Applicant Assessment":
         st.write("")
 
         with st.popover("📁 Bulk Upload Application", use_container_width=True):
-            st.markdown("**Upload Batch Data**")
+            # --- TEMPLATE GENERATOR ---
+            st.markdown("**1. Download Application Template**")
+            st.caption("Use this formatted CSV to ensure your batch upload is accepted.")
+            
+            # Define the exact schema your pipeline expects
+            template_cols = [
+                'ID', 'LIMIT_BAL', 'SEX', 'EDUCATION', 'MARRIAGE', 'AGE', 
+                'PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6', 
+                'BILL_AMT1', 'BILL_AMT2', 'BILL_AMT3', 'BILL_AMT4', 'BILL_AMT5', 'BILL_AMT6', 
+                'PAY_AMT1', 'PAY_AMT2', 'PAY_AMT3', 'PAY_AMT4', 'PAY_AMT5', 'PAY_AMT6'
+            ]
+            
+            # Create an empty dataframe with these headers and convert to CSV
+            template_df = pd.DataFrame(columns=template_cols)
+            csv_template = template_df.to_csv(index=False).encode('utf-8')
+            
+            st.download_button(
+                label="📥 Download Blank CSV",
+                data=csv_template,
+                file_name="RiskMetrics_Batch_Template.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+            
+            st.divider()
+
+            # ------------------------------
+
+            st.markdown("**2. Upload Batch Data**")
             uploaded_file = st.file_uploader(
                 "Upload CSV/Excel file",
                 type=["csv", "xlsx", "xls"],
@@ -145,9 +221,11 @@ if page == "Applicant Assessment":
                     'processed_filename' not in st.session_state or
                     st.session_state['processed_filename'] != uploaded_file.name
                 )
+                
                 if is_new_file:
                     with st.spinner("Processing dataset..."):
                         try:
+                            # 1. Load the raw data
                             if uploaded_file.name.endswith('.csv'):
                                 df = pd.read_csv(uploaded_file)
                             elif uploaded_file.name.endswith('.xls'):
@@ -155,19 +233,35 @@ if page == "Applicant Assessment":
                             else:
                                 df = pd.read_excel(uploaded_file, engine='openpyxl')
 
+                            df = clean_dataset_headers(df)
+
+                            # 2. Map standard features and standardize casing
                             df = utils.map_columns(df)
                             df.columns = df.columns.str.upper()
 
-                            if 'ID' not in df.columns:
-                                df.insert(0, 'ID', [f"APP-{i:04d}" for i in range(1, len(df)+1)])
+                            # 3. Validate dataset schema for required features
+                            is_valid, missing_cols = utils.validate_dataset_schema(df)
 
+                            if not is_valid:
+                                st.error(f"Upload rejected. The dataset is missing required credit features: {', '.join(missing_cols)}")
+                                st.stop() 
+
+                            # 4. Dynamic Primary Key (ID) Detection
+                            id_col = detect_id_column(df)
+                            
+                            if id_col is None:
+                                df.insert(0, 'Generated_ID', [f"APP-{i:04d}" for i in range(1, len(df) + 1)])
+                                id_col = 'Generated_ID'
+                                st.toast("No unique ID column found. Auto-generated temporary IDs.")
+                                
+                            # 5. Commit to Session State
+                            st.session_state['id_column'] = id_col
                             st.session_state['dataset'] = df
-
-                            for app_id in df['ID']:
-                                if app_id not in st.session_state['applicant_states']:
-                                    st.session_state['applicant_states'][app_id] = "Pending"
-
+                            
+                            # Reset applicant states for the new batch
+                            st.session_state['applicant_states'] = {str(uid): "Pending" for uid in df[id_col].values}
                             st.session_state['processed_filename'] = uploaded_file.name
+                            
                             st.toast(f"Successfully loaded {len(df)} applicants!", icon="✅")
 
                         except Exception as e:
@@ -202,20 +296,19 @@ if page == "Applicant Assessment":
 
     # --- NEW QUEUE LOGIC ---
     if st.session_state['dataset'] is not None and not pending_applicants:
-        # Graceful empty state when the queue is finished
         st.success("🎉 All applicants in the current batch have been processed! Check the Archive tab for the ledger.")
         
     elif pending_applicants:
         # We removed the "Select an applicant..." placeholder
         applicant_list = [f"{app_id} (Pending)" for app_id in pending_applicants]
         
-        # Because index defaults to 0, it ALWAYS auto-loads the next person in line
         selected_option = st.selectbox("Applicant ID", options=applicant_list, label_visibility="collapsed")
         st.markdown("<br>", unsafe_allow_html=True)
 
         selected_id = selected_option.split(" ")[0]
         df = st.session_state['dataset']
-        app_data = df[df['ID'] == selected_id].iloc[0]
+        id_col = st.session_state['id_column']
+        app_data = df[df[id_col].astype(str) == str(selected_id)].iloc[0]
 
         left_col, right_col = st.columns([1, 1], gap="large")
 
@@ -397,7 +490,7 @@ if page == "Applicant Assessment":
                     )
 
         # ==========================================
-        # NEW SECTION: DEEP DIVE ANALYSIS CHARTS
+        # DEEP DIVE ANALYSIS CHARTS
         # ==========================================
         st.markdown("<br>", unsafe_allow_html=True)
         st.subheader("Deep Dive Analysis")
@@ -416,7 +509,7 @@ if page == "Applicant Assessment":
                 fig_trend.add_trace(go.Scatter(
                     x=trend_df['Month'], y=trend_df['Billed Amount'],
                     name="Billed Amount",
-                    line=dict(color="rgba(128, 128, 128, 0.6)", width=3, dash="dot"), # <-- Changed here
+                    line=dict(color="rgba(128, 128, 128, 0.6)", width=3, dash="dot"), 
                     mode="lines+markers"
                 ))
                 fig_trend.add_trace(go.Scatter(
@@ -439,7 +532,15 @@ if page == "Applicant Assessment":
         with chart_col2:
             with st.container(border=True):
                 st.markdown("<p class='section-title'>Risk Factors Analysis</p>", unsafe_allow_html=True)
-                st.markdown("<p class='history-desc'>Top 5 variables driving the current risk score.</p>", unsafe_allow_html=True)
+                
+                st.markdown("""
+                    <div style='background-color: rgba(128, 128, 128, 0.05); padding: 10px; border-radius: 5px; font-size: 0.9rem; margin-bottom: 15px;'>
+                        <b>How to read this chart:</b><br>
+                        <span style='color: #ef4444;'><b>Red bars (+):</b></span> Factors pushing the applicant <b>closer</b> to default.<br>
+                        <span style='color: #22c55e;'><b>Green bars (-):</b></span> Factors pushing the applicant <b>further away</b> from default.<br>
+                        <i>The length of the bar represents the strength of the factor's impact on the final score.</i>
+                    </div>
+                """, unsafe_allow_html=True)
 
                 factors_df = utils.get_risk_factors(app_data, rf_model, yj_transformer)
 
@@ -485,10 +586,12 @@ elif page == "Applicant Archive":
         if processed_ids:
             # 2. Extract their data from the main dataset
             df = st.session_state['dataset']
-            archive_df = df[df['ID'].isin(processed_ids)].copy()
+            id_col = st.session_state['id_column']
+            # Cast both sides to string to guarantee matches regardless of data type
+            str_processed_ids = [str(pid) for pid in processed_ids]
             
-            # 3. Attach their final decision status to the row
-            archive_df['Final Decision'] = archive_df['ID'].map(st.session_state['applicant_states'])
+            archive_df = df[df[id_col].astype(str).isin(str_processed_ids)].copy()
+            archive_df['Final Decision'] = archive_df[id_col].astype(str).map(st.session_state['applicant_states'])
             
             # 4. Clean up the dataframe for the UI
             display_cols = ['ID', 'AGE', 'SEX', 'EDUCATION', 'LIMIT_BAL', 'Final Decision']
@@ -656,7 +759,7 @@ elif page == "Batch Analytics":
                     fig_box.add_trace(go.Box(
                         y=df[mapped_edu == edu_level]['LIMIT_BAL'], 
                         name=edu_level,
-                        boxpoints=False # Minimalist look
+                        boxpoints=False
                     ))
                 
                 fig_box.update_layout(
@@ -731,8 +834,8 @@ elif page == "Engine Diagnostics":
             )
             st.plotly_chart(fig_global, use_container_width=True, config={'displayModeBar': False})
 
-            # ==========================================
-    # NEW SECTION: THREAT MATRIX & KPIs
+    # ==========================================
+    # THREAT MATRIX & KPIs
     # ==========================================
     st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("Model Performance (Threat Matrix)")
@@ -757,7 +860,6 @@ elif page == "Engine Diagnostics":
     with st.container(border=True):
         st.markdown("<p class='section-title'>Confusion Matrix</p>", unsafe_allow_html=True)
 
-        # Reformat the 2D array for Plotly's bottom-to-top y-axis drawing
         z_data = [cm[1], cm[0]] 
 
         fig_cm = go.Figure(data=go.Heatmap(

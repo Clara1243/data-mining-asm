@@ -1,16 +1,32 @@
 import os
 import pandas as pd
+import streamlit as st
 import joblib
 import shap
 import numpy as np
 
 def load_credit_models():
-    """Loads both the preprocessor and the Random Forest model."""
+    # 1. Get the directory where model_utils.py lives (the 'app' folder)
     current_dir = os.path.dirname(os.path.abspath(__file__))
     
-    rf_path = os.path.join(current_dir, "model", "champion_rf_pipeline.joblib")
-    yj_path = os.path.join(current_dir, "model", "yeo_johnson_transformer.joblib")
+    # 2. Step UP one level to the project root, then DOWN into the 'model' folder
+    project_root = os.path.dirname(current_dir)
+    model_dir = os.path.join(project_root, "model")
     
+    # 3. Define the exact paths
+    rf_path = os.path.join(model_dir, "champion_rf_pipeline.joblib")
+    yj_path = os.path.join(model_dir, "yeo_johnson_transformer.joblib")
+    
+    # 4. Safety Check
+    if not os.path.exists(rf_path):
+        st.error(f"🛑 CRITICAL ERROR: Cannot find the Random Forest model!\n\nPython is searching exactly here: `{rf_path}`")
+        st.stop()
+        
+    if not os.path.exists(yj_path):
+        st.error(f"🛑 CRITICAL ERROR: Cannot find the Transformer model!\n\nPython is searching exactly here: `{yj_path}`")
+        st.stop()
+
+    # 5. Load models if paths are valid
     rf_model = joblib.load(rf_path)
     yj_transformer = joblib.load(yj_path)
     
@@ -27,6 +43,20 @@ def map_columns(df):
         'X21': 'PAY_AMT4', 'X22': 'PAY_AMT5', 'X23': 'PAY_AMT6'
     }
     return df.rename(columns=mapping)
+
+def validate_dataset_schema(df):
+    """Checks if the uploaded dataset contains the critical minimum features."""
+    required_features = [
+        'LIMIT_BAL', 'SEX', 'EDUCATION', 'MARRIAGE', 'AGE', 
+        'PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6'
+    ]
+    
+    df_columns = df.columns.tolist()
+    missing_features = [feature for feature in required_features if feature not in df_columns]
+    
+    if missing_features:
+        return False, missing_features
+    return True, []
 
 def prepare_features(app_row, rf_model):
     """Cleans data and automatically aligns it to the pipeline's exact expected features."""
