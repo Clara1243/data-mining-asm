@@ -4,14 +4,15 @@ An enterprise-grade Decision-Support System built for the **CDS6314 Data Mining*
 
 ## 📁 Repository Structure
 
-Ensure your repository contains the following core files before deployment:
-
-* `app.py` - The main Streamlit dashboard application.
-* `model_utils.py` - Background logic, Explanable AI (SHAP) extraction, and EDA processing.
-* `style.css` - Custom UI/UX styling for the dashboard.
-* `requirements.txt` - Required Python dependencies for the cloud server.
-* `model/` - Directory containing the pre-trained `.joblib` model and transformer files.
-* `logo-removedbg.png` - Application branding asset.
+|-app
+|   |--- app.py           (UI + app logic only)
+|   |--- data_utils.py    (NEW — data wrangling)
+|   |--- model_utils.py   (ML only)
+|   |--- style.css        (all styling)
+|
+|-model
+|   |--- champion_rf_pipeline.joblib
+|   |--- yeo_johnson_transformer.joblib
 
 ---
 

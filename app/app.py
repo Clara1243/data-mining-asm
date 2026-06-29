@@ -1,158 +1,131 @@
-import streamlit as st
+"""
+- Page config, CSS loading, sidebar navigation
+- Session-state management (dataset, applicant queue, audit ledger)
+- File upload / ingestion flow (delegates to data_utils)
+- All Streamlit UI rendering for each page
+- Audit-record creation and decision submission
+"""
+
 import os
-import pandas as pd
+from datetime import datetime, timezone
+
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
-import model_utils as utils
+import streamlit as st
 from streamlit_option_menu import option_menu
+
+import data_utils as du
+import model_utils as mu
+
+# ---------------------------------------------------------------------------
+# Page config
+# ---------------------------------------------------------------------------
 
 st.set_page_config(
     page_title="Credit Risk Intelligence",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 
-def load_css(file_name):
+# ---------------------------------------------------------------------------
+# CSS loader
+# ---------------------------------------------------------------------------
+
+def load_css(file_name: str) -> None:
+    """Injects the contents of *file_name* as a <style> block."""
     current_dir = os.path.dirname(os.path.abspath(__file__))
     css_path = os.path.join(current_dir, file_name)
-    
+
     try:
         with open(css_path, encoding="utf-8") as f:
             st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
     except FileNotFoundError:
         st.error(f"UI Error: Could not find styling file at {css_path}")
 
+
 load_css("style.css")
+
+
+# ---------------------------------------------------------------------------
+# Model loading (cached)
+# ---------------------------------------------------------------------------
 
 @st.cache_resource
 def get_models():
-    return utils.load_credit_models()
+    return mu.load_credit_models()
+
 
 rf_model, yj_transformer = get_models()
 
 
-if 'dataset' not in st.session_state:
-    st.session_state['dataset'] = None
-if 'applicant_states' not in st.session_state:
-    st.session_state['applicant_states'] = {}
+# ---------------------------------------------------------------------------
+# Session state initialisation
+# ---------------------------------------------------------------------------
+
+if "dataset" not in st.session_state:
+    st.session_state["dataset"] = None
+if "applicant_states" not in st.session_state:
+    st.session_state["applicant_states"] = {}
 
 
-def map_sex(val):
-    return "Male" if val == 1 else "Female" if val == 2 else "Unknown"
+# ---------------------------------------------------------------------------
+# Audit / decision helpers
+# ---------------------------------------------------------------------------
 
+def submit_decision(
+    app_id: str,
+    decision: str,
+    dynamic_id_name: str,
+    current_prob: float,
+    current_risk: str,
+    raw_data: pd.Series,
+    notes: str,
+) -> None:
+    """
+    Builds an immutable audit record for one applicant decision and commits
+    it to session state.
+    """
+    factors = mu.get_risk_factors(raw_data, rf_model, yj_transformer)
+    top_factors = factors.tail(3)["Feature"].tolist()
 
-def map_education(val):
-    mapping = {
-        1: "Graduate School", 2: "University", 3: "High School"
+    history_cols = ["PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6"]
+    frozen_history = {
+        col: int(raw_data.get(col, 0))
+        for col in history_cols
+        if col in raw_data
     }
-    return mapping.get(val, "Others")
 
-def clean_dataset_headers(df):
-    """Smart detection and cleaning of staggered or duplicate CSV headers."""
-    if df.empty:
-        return df
-        
-    def safe_convert_to_numeric(dataframe):
-        """Safely forces numbers to numeric types but leaves text columns alone."""
-        for col in dataframe.columns:
-            try:
-                dataframe[col] = pd.to_numeric(dataframe[col])
-            except ValueError:
-                pass
-        return dataframe
-
-    # 1. Check for a Duplicate Header (e.g., Column is 'ID', Row 0 is also 'ID')
-    if all(str(c).strip() == str(v).strip() for c, v in zip(df.columns, df.iloc[0])):
-        df = df.iloc[1:].reset_index(drop=True)
-        return safe_convert_to_numeric(df)
-        
-    # 2. Check for Staggered Headers (e.g., Columns are 'X1', 'X2', Row 0 is 'LIMIT_BAL')
-    first_row_values = df.iloc[0].astype(str).str.strip().str.upper().values
-    
-    if 'LIMIT_BAL' in first_row_values or 'ID' in first_row_values or 'AGE' in first_row_values:
-        # Promote row 0 to be the actual column names
-        df.columns = df.iloc[0].astype(str).str.strip() 
-        df = df.iloc[1:].reset_index(drop=True)
-        
-        df = safe_convert_to_numeric(df)
-        
-    return df
-
-def detect_id_column(df):
-    """Smart detection of the primary key / ID column in an uploaded dataset."""
-    # 1. Look for obvious standard names (Case Insensitive)
-    known_id_names = ['id', 'clientnum', 'client_id', 'customer_id', 'applicant_id', 'ref_no']
-    for col in df.columns:
-        if str(col).lower() in known_id_names:
-            return col
-            
-    # 2. Look for columns containing 'id' or 'num' that are 100% unique
-    for col in df.columns:
-        if ('id' in str(col).lower() or 'num' in str(col).lower()) and df[col].nunique() == len(df):
-            return col
-            
-    # 3. Fallback: If the very first column has completely unique values, assume it's the ID
-    if df.iloc[:, 0].nunique() == len(df):
-        return df.columns[0]
-        
-    return None # Return None if no valid ID column is found
-
-def map_marriage(val):
-    mapping = {1: "Married", 2: "Single", 3: "Others"}
-    return mapping.get(val, "Unknown")
-
-
-def get_history_badge(val):
-    try:
-        val = int(val)
-        if val == -2:
-            return "badge-gray", "No Consumption (-2)"
-        if val == -1:
-            return "badge-navy", "Paid in Full (-1)"
-        if val == 0:
-            return "badge-navy", "Revolving (0)"
-        return "badge-red", f"{val} Month(s) Late"
-    except (ValueError, TypeError):
-        return "badge-gray", "Unknown"
-    
-
-def submit_decision(app_id, decision, dynamic_id_name, current_prob, current_risk, raw_data, notes):
-    # Recalculate top factors silently for the audit log
-    factors = utils.get_risk_factors(raw_data, rf_model, yj_transformer)
-    top_factors = factors.tail(3)['Feature'].tolist() 
-    
-    # Freeze the 6-month historical snapshot
-    history_cols = ['PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6']
-    frozen_history = {col: int(raw_data.get(col, 0)) for col in history_cols if col in raw_data}
-
-    # Build the immutable audit payload
     audit_record = {
         "Decision": decision,
         "Score": round(current_prob, 1),
         "Risk_Tier": current_risk,
         "Top_Drivers": top_factors,
         "PiT_History": frozen_history,
-        "Justification": notes if notes else "No manual justification provided."
+        "Justification": notes or "No manual justification provided.",
+        "Timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
     }
 
-    # Mutate state safely
-    updated_states = st.session_state['applicant_states'].copy()
+    updated_states = st.session_state["applicant_states"].copy()
     updated_states[app_id] = audit_record
-    st.session_state['applicant_states'] = updated_states
-    
+    st.session_state["applicant_states"] = updated_states
+
     icon = "✅" if decision == "Approved" else "🚫"
     st.toast(f"Audit Log Saved: {dynamic_id_name} '{app_id}' {decision}", icon=icon)
 
 
-# --- Sidebar Navigation ---
+# ---------------------------------------------------------------------------
+# Sidebar navigation
+# ---------------------------------------------------------------------------
+
 with st.sidebar:
     logo_col, text_col = st.columns([1, 3], vertical_alignment="center")
 
     with logo_col:
         current_dir = os.path.dirname(os.path.abspath(__file__))
         logo_path = os.path.join(current_dir, "logo-removedbg.png")
-        
+
         if os.path.exists(logo_path):
             st.image(logo_path, use_container_width=True)
         else:
@@ -164,7 +137,7 @@ with st.sidebar:
             "<h2 class='brand-title'>RiskMetrics</h2>"
             "<p class='brand-subtitle'>Decision-Support System</p>"
             "</div>",
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
 
     st.markdown("<div class='spacer-md'></div>", unsafe_allow_html=True)
@@ -172,12 +145,21 @@ with st.sidebar:
 
     page = option_menu(
         menu_title=None,
-        options=["Applicant Assessment", "Applicant Archive", "Batch Analytics", "Engine Diagnostics"],
+        options=[
+            "Applicant Assessment",
+            "Applicant Archive",
+            "Batch Analytics",
+            "Engine Diagnostics",
+        ],
         icons=["person-vcard", "archive", "cpu", "pie-chart"],
         default_index=0,
         styles={
-            "container": {"padding": "0!important", "background-color": "transparent", "border": "none"},
-            "icon": {"color": "var(--text-color)", "font-size": "16px"}, 
+            "container": {
+                "padding": "0!important",
+                "background-color": "transparent",
+                "border": "none",
+            },
+            "icon": {"color": "var(--text-color)", "font-size": "16px"},
             "nav-link": {
                 "font-size": "15px",
                 "text-align": "left",
@@ -187,19 +169,23 @@ with st.sidebar:
                 "--hover-color": "rgba(128, 128, 128, 0.1)",
             },
             "nav-link-selected": {
-                "background-color": "#DDA705", 
+                "background-color": "#DDA705",
                 "color": "white",
-                "font-weight": "600"
+                "font-weight": "600",
             },
-        }
+        },
     )
 
     st.markdown(
-        "<div class='sidebar-footer'>© 2026 Data Mining Project v4.2</div>",
-        unsafe_allow_html=True
+        "<div class='sidebar-footer'>© 2026 Data Mining Project v5.0</div>",
+        unsafe_allow_html=True,
     )
 
-# --- Main Content ---
+
+# ===========================================================================
+# PAGE: Applicant Assessment
+# ===========================================================================
+
 if page == "Applicant Assessment":
 
     header_col1, header_col2 = st.columns([3, 1])
@@ -211,102 +197,94 @@ if page == "Applicant Assessment":
         st.write("")
 
         with st.popover("📁 Bulk Upload Application", use_container_width=True):
-            # --- TEMPLATE GENERATOR ---
+
+            # --- Template generator ---
             st.markdown("**1. Download Application Template**")
             st.caption("Use this formatted CSV to ensure your batch upload is accepted.")
-            
-            # Define the exact schema your pipeline expects
+
             template_cols = [
-                'ID', 'IS_NEW_APPLICANT', 'LIMIT_BAL', 'SEX', 'EDUCATION', 'MARRIAGE', 'AGE', 
-                'PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6', 
-                'BILL_AMT1', 'BILL_AMT2', 'BILL_AMT3', 'BILL_AMT4', 'BILL_AMT5', 'BILL_AMT6', 
-                'PAY_AMT1', 'PAY_AMT2', 'PAY_AMT3', 'PAY_AMT4', 'PAY_AMT5', 'PAY_AMT6'
+                "ID", "IS_NEW_APPLICANT", "LIMIT_BAL", "SEX", "EDUCATION",
+                "MARRIAGE", "AGE",
+                "PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6",
+                "BILL_AMT1", "BILL_AMT2", "BILL_AMT3",
+                "BILL_AMT4", "BILL_AMT5", "BILL_AMT6",
+                "PAY_AMT1", "PAY_AMT2", "PAY_AMT3",
+                "PAY_AMT4", "PAY_AMT5", "PAY_AMT6",
             ]
-                        
-            # Create an empty dataframe with these headers and convert to CSV
-            template_df = pd.DataFrame(columns=template_cols)
-            csv_template = template_df.to_csv(index=False).encode('utf-8')
-            
+
+            csv_template = pd.DataFrame(columns=template_cols).to_csv(index=False).encode("utf-8")
+
             st.download_button(
                 label="📥 Download Blank CSV",
                 data=csv_template,
                 file_name="RiskMetrics_Batch_Template.csv",
                 mime="text/csv",
-                use_container_width=True
+                use_container_width=True,
             )
-            
+
             st.divider()
 
-            # ------------------------------
-
+            # --- Batch upload ---
             st.markdown("**2. Upload Batch Data**")
             uploaded_file = st.file_uploader(
                 "Upload CSV/Excel file",
                 type=["csv", "xlsx", "xls"],
-                label_visibility="collapsed"
+                label_visibility="collapsed",
             )
 
             if uploaded_file is not None:
                 is_new_file = (
-                    'processed_filename' not in st.session_state or
-                    st.session_state['processed_filename'] != uploaded_file.name
+                    "processed_filename" not in st.session_state
+                    or st.session_state["processed_filename"] != uploaded_file.name
                 )
-                
+
                 if is_new_file:
                     with st.spinner("Processing dataset..."):
                         try:
-                            # 1. Load the raw data
-                            if uploaded_file.name.endswith('.csv'):
+                            # 1. Load raw data
+                            if uploaded_file.name.endswith(".csv"):
                                 df = pd.read_csv(uploaded_file)
-                            elif uploaded_file.name.endswith('.xls'):
-                                df = pd.read_excel(uploaded_file, engine='xlrd')
+                            elif uploaded_file.name.endswith(".xls"):
+                                df = pd.read_excel(uploaded_file, engine="xlrd")
                             else:
-                                df = pd.read_excel(uploaded_file, engine='openpyxl')
+                                df = pd.read_excel(uploaded_file, engine="openpyxl")
 
-                            df = clean_dataset_headers(df)
-
-                            # 2. Map standard features and standardize casing
-                            df = utils.map_columns(df)
+                            # 2. Clean headers, map columns, standardise casing
+                            df = du.clean_dataset_headers(df)
+                            df = du.map_columns(df)
                             df.columns = df.columns.str.upper()
 
-                            # 3. Validate dataset schema for required features
-                            is_valid, missing_cols = utils.repair_dataset_schema(df)
-
+                            # 3. Repair missing schema columns
+                            df, missing_cols = du.repair_dataset_schema(df)
                             if missing_cols:
-                                st.warning(f"⚠️ **Partial Data Detected:** The uploaded file was missing the following columns: `{', '.join(missing_cols)}`. The system has automatically applied conservative baseline values to proceed.")
-                            
-                            id_col = detect_id_column(df)
+                                st.warning(
+                                    f"⚠️ **Partial Data Detected:** Missing columns "
+                                    f"`{', '.join(missing_cols)}` were filled with "
+                                    f"conservative baselines."
+                                )
 
+                            # 4. Detect or generate the ID column
+                            id_col = du.detect_id_column(df)
                             if id_col is None:
-                                df.insert(0, 'Generated_ID', [f"APP-{i:04d}" for i in range(1, len(df) + 1)])
-                                id_col = 'Generated_ID'
+                                df.insert(
+                                    0, "Generated_ID",
+                                    [f"APP-{i:04d}" for i in range(1, len(df) + 1)],
+                                )
+                                id_col = "Generated_ID"
                                 st.toast("No unique ID column found. Auto-generated temporary IDs.")
 
-                            # 4. Handle New Applicant Auto-Detection
-                            if 'IS_NEW_APPLICANT' not in df.columns:
-                                pay_cols = ['PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6']
-                                bill_cols = [f'BILL_AMT{i}' for i in range(1, 7)]
-                                pay_amt_cols = [f'PAY_AMT{i}' for i in range(1, 7)]
-                                
-                                # Force convert to numeric safely so "-2" text becomes -2 integer
-                                temp_pay = df[pay_cols].apply(pd.to_numeric, errors='coerce')
-                                temp_fin = df[bill_cols + pay_amt_cols].apply(pd.to_numeric, errors='coerce')
-                                
-                                # Check for -2 (No consumption) OR 0 (injected by the repair function)
-                                is_status_empty = temp_pay.isin([-2, 0, np.nan]).all(axis=1)
-                                is_financials_empty = temp_fin.isin([0, np.nan]).all(axis=1)
-                                
-                                df['IS_NEW_APPLICANT'] = is_status_empty & is_financials_empty
+                            # 5. Auto-detect new applicants
+                            if "IS_NEW_APPLICANT" not in df.columns:
+                                df["IS_NEW_APPLICANT"] = du.detect_new_applicants(df)
                                 st.toast("Auto-detected new applicants based on empty 6-month histories.")
-                                
-                            # 5. Commit to Session State
-                            st.session_state['id_column'] = id_col
-                            st.session_state['dataset'] = df
-                            
-                            # Reset applicant states for the new batch
-                            st.session_state['applicant_states'] = {str(uid): "Pending" for uid in df[id_col].values}
-                            st.session_state['processed_filename'] = uploaded_file.name
-                            
+
+                            # 6. Commit to session state
+                            st.session_state["id_column"] = id_col
+                            st.session_state["dataset"] = df
+                            st.session_state["applicant_states"] = {
+                                str(uid): "Pending" for uid in df[id_col].values
+                            }
+                            st.session_state["processed_filename"] = uploaded_file.name
                             st.toast(f"Successfully loaded {len(df)} applicants!", icon="✅")
 
                         except Exception as e:
@@ -314,140 +292,151 @@ if page == "Applicant Assessment":
                 else:
                     st.success(f"File '{uploaded_file.name}' is loaded and ready.")
 
-        if st.session_state.get('dataset') is not None and st.session_state.get('applicant_states'):
+        # Export button (only shown when data is available)
+        if (
+            st.session_state.get("dataset") is not None
+            and st.session_state.get("applicant_states")
+        ):
             export_data = [
                 {"Applicant ID": k, "State": v}
-                for k, v in st.session_state['applicant_states'].items()
+                for k, v in st.session_state["applicant_states"].items()
             ]
-            export_df = pd.DataFrame(export_data)
-            csv_buffer = export_df.to_csv(index=False).encode('utf-8')
+            csv_buffer = pd.DataFrame(export_data).to_csv(index=False).encode("utf-8")
 
             st.download_button(
                 label="📥 Export Results",
                 data=csv_buffer,
                 file_name="applicant_decisions.csv",
                 mime="text/csv",
-                use_container_width=True
+                use_container_width=True,
             )
 
+    # --- Applicant queue ---
     st.markdown("##### Select Applicant from Queue:")
 
     pending_applicants = []
-    if st.session_state['dataset'] is not None:
+    if st.session_state["dataset"] is not None:
         pending_applicants = [
-            app_id for app_id, state in st.session_state['applicant_states'].items()
+            app_id
+            for app_id, state in st.session_state["applicant_states"].items()
             if state == "Pending"
         ]
 
-    # --- NEW QUEUE LOGIC ---
-    if st.session_state['dataset'] is not None and not pending_applicants:
-        st.success("🎉 All applicants in the current batch have been processed! Check the Archive tab for the ledger.")
-        
+    if st.session_state["dataset"] is not None and not pending_applicants:
+        st.success(
+            "🎉 All applicants in the current batch have been processed! "
+            "Check the Archive tab for the ledger."
+        )
+
     elif pending_applicants:
         applicant_list = [f"{app_id} (Pending)" for app_id in pending_applicants]
-        
-        selected_option = st.selectbox("Applicant ID", options=applicant_list, label_visibility="collapsed")
+        selected_option = st.selectbox(
+            "Applicant ID", options=applicant_list, label_visibility="collapsed"
+        )
         st.markdown("<br>", unsafe_allow_html=True)
-        
-        selected_id = selected_option.replace(" (Pending)", "") 
-        
-        df = st.session_state['dataset']
-        id_col = st.session_state['id_column']
+
+        selected_id = selected_option.replace(" (Pending)", "")
+
+        df = st.session_state["dataset"]
+        id_col = st.session_state["id_column"]
 
         filtered_df = df[df[id_col].astype(str) == str(selected_id)]
-
         if filtered_df.empty:
             st.warning(f"Data sync delay for ID: {selected_id}. Refreshing queue...")
-            st.rerun() # Force a clean rerun to repair the UI state
+            st.rerun()
         else:
             app_data = filtered_df.iloc[0]
 
         left_col, right_col = st.columns([1, 1], gap="large")
 
+        # ---- Left column: Applicant Profile ----
         with left_col:
             st.subheader("Applicant Profile Details")
-            raw_new_val = app_data.get('IS_NEW_APPLICANT', 'False')
-            
-            # ADDED '1.0' to catch decimal floats from Excel/Pandas
-            is_new = str(raw_new_val).strip().lower() in ['true', '1', '1.0', 'yes', 't']
-            
+
+            raw_new_val = app_data.get("IS_NEW_APPLICANT", "False")
+            is_new = str(raw_new_val).strip().lower() in ["true", "1", "1.0", "yes", "t"]
+
             if is_new:
-                st.warning("⚠️ **Thin File Detected:** This applicant has no prior credit history. The risk score is based purely on demographics and initial credit limit.")
+                st.warning(
+                    "⚠️ **Thin File Detected:** This applicant has no prior credit "
+                    "history. The risk score is based purely on demographics and "
+                    "initial credit limit."
+                )
 
             with st.container(border=True):
                 st.markdown("<p class='section-title'>Demographics</p>", unsafe_allow_html=True)
-                d_row1_col1, d_row1_col2 = st.columns(2)
 
+                d_row1_col1, d_row1_col2 = st.columns(2)
                 with d_row1_col1:
                     st.markdown(
                         f"<div class='profile-item'><span class='profile-label'>Sex<br></span>"
-                        f"<span class='profile-value'>{map_sex(app_data.get('SEX', 0))}</span></div>",
-                        unsafe_allow_html=True
+                        f"<span class='profile-value'>{du.map_sex(app_data.get('SEX', 0))}</span></div>",
+                        unsafe_allow_html=True,
                     )
                 with d_row1_col2:
                     st.markdown(
                         f"<div class='profile-item'><span class='profile-label'>Age<br></span>"
                         f"<span class='profile-value'>{app_data.get('AGE', 'N/A')}</span></div>",
-                        unsafe_allow_html=True
+                        unsafe_allow_html=True,
                     )
 
                 d_row2_col1, d_row2_col2 = st.columns(2)
                 with d_row2_col1:
                     st.markdown(
                         f"<div class='profile-item'><span class='profile-label'>Education<br></span>"
-                        f"<span class='profile-value'>{map_education(app_data.get('EDUCATION', 0))}</span></div>",
-                        unsafe_allow_html=True
+                        f"<span class='profile-value'>{du.map_education(app_data.get('EDUCATION', 0))}</span></div>",
+                        unsafe_allow_html=True,
                     )
                 with d_row2_col2:
                     st.markdown(
                         f"<div class='profile-item'><span class='profile-label'>Marital Status<br></span>"
-                        f"<span class='profile-value'>{map_marriage(app_data.get('MARRIAGE', 0))}</span></div>",
-                        unsafe_allow_html=True
+                        f"<span class='profile-value'>{du.map_marriage(app_data.get('MARRIAGE', 0))}</span></div>",
+                        unsafe_allow_html=True,
                     )
 
                 st.divider()
-
                 st.markdown("<p class='section-title'>Financial Information</p>", unsafe_allow_html=True)
-                raw_limit = pd.to_numeric(app_data.get('LIMIT_BAL', 0), errors='coerce') or 0
+
+                raw_limit = pd.to_numeric(app_data.get("LIMIT_BAL", 0), errors="coerce") or 0
                 limit_bal = f"$ {raw_limit:,.0f}"
                 st.markdown(
                     f"<div class='profile-item'><span class='profile-label'>Credit Limit Balance<br></span>"
                     f"<span class='profile-value-lg'>{limit_bal}</span></div>",
-                    unsafe_allow_html=True
+                    unsafe_allow_html=True,
                 )
 
                 st.divider()
-
                 st.markdown("<p class='section-title'>6-Month Repayment History</p>", unsafe_allow_html=True)
                 st.markdown(
                     "<p class='history-desc'>Historical payment status "
                     "(-2: No consumption, -1: Paid in full, 0: Revolving, 1-9: Months delayed)</p>",
-                    unsafe_allow_html=True
+                    unsafe_allow_html=True,
                 )
 
-                c1, t1 = get_history_badge(app_data.get('PAY_0', 0))
-                c2, t2 = get_history_badge(app_data.get('PAY_2', 0))
-                c3, t3 = get_history_badge(app_data.get('PAY_3', 0))
-                c4, t4 = get_history_badge(app_data.get('PAY_4', 0))
-                c5, t5 = get_history_badge(app_data.get('PAY_5', 0))
-                c6, t6 = get_history_badge(app_data.get('PAY_6', 0))
+                badges = [
+                    du.get_history_badge(app_data.get(col, 0))
+                    for col in ["PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6"]
+                ]
+                labels = ["Current", "2 Mo Ago", "3 Mo Ago", "4 Mo Ago", "5 Mo Ago", "6 Mo Ago"]
 
-                st.markdown(f"""
-                    <div class="history-grid">
-                        <div class="history-card"><div class="history-label">Current</div><span class="history-badge {c1}">{t1}</span></div>
-                        <div class="history-card"><div class="history-label">2 Mo Ago</div><span class="history-badge {c2}">{t2}</span></div>
-                        <div class="history-card"><div class="history-label">3 Mo Ago</div><span class="history-badge {c3}">{t3}</span></div>
-                        <div class="history-card"><div class="history-label">4 Mo Ago</div><span class="history-badge {c4}">{t4}</span></div>
-                        <div class="history-card"><div class="history-label">5 Mo Ago</div><span class="history-badge {c5}">{t5}</span></div>
-                        <div class="history-card"><div class="history-label">6 Mo Ago</div><span class="history-badge {c6}">{t6}</span></div>
-                    </div>
-                """, unsafe_allow_html=True)
+                cards_html = "".join(
+                    f"<div class='history-card'>"
+                    f"<div class='history-label'>{lbl}</div>"
+                    f"<span class='history-badge {css}'>{text}</span>"
+                    f"</div>"
+                    for lbl, (css, text) in zip(labels, badges)
+                )
+                st.markdown(
+                    f"<div class='history-grid'>{cards_html}</div>",
+                    unsafe_allow_html=True,
+                )
 
+        # ---- Right column: Risk Assessment ----
         with right_col:
             st.subheader("Default Risk Assessment")
 
             with st.container(border=True):
-                default_prob = utils.process_and_predict(app_data, rf_model, yj_transformer)
+                default_prob = mu.process_and_predict(app_data, rf_model, yj_transformer)
 
                 if default_prob < 40:
                     risk_tag, risk_color = "LOW RISK", "#22c55e"
@@ -457,15 +446,14 @@ if page == "Applicant Assessment":
                     risk_tag, risk_color = "HIGH RISK", "#ef4444"
 
                 fig = go.Figure(data=[go.Pie(
-                    values=[default_prob, 100-default_prob],
+                    values=[default_prob, 100 - default_prob],
                     hole=0.75,
-                    marker_colors=[risk_color, "rgba(128, 128, 128, 0.2)"], # <-- Changed here
-                    textinfo='none',
-                    hoverinfo='none',
-                    direction='clockwise',
-                    sort=False
+                    marker_colors=[risk_color, "rgba(128, 128, 128, 0.2)"],
+                    textinfo="none",
+                    hoverinfo="none",
+                    direction="clockwise",
+                    sort=False,
                 )])
-                
                 fig.update_layout(
                     showlegend=False,
                     height=180,
@@ -474,43 +462,50 @@ if page == "Applicant Assessment":
                         text=f"{default_prob:.1f}%",
                         x=0.5, y=0.5,
                         font_size=32,
-                        showarrow=False
-                    )]
+                        showarrow=False,
+                    )],
                 )
-
-                st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
                 st.markdown(
-                    f'<div class="risk-tag-container"><span class="risk-tag" '
-                    f'style="color:{risk_color}; background-color:{risk_color}20;">{risk_tag}</span></div>',
-                    unsafe_allow_html=True
+                    f'<div class="risk-tag-container">'
+                    f'<span class="risk-tag" '
+                    f'style="color:{risk_color}; background-color:{risk_color}20;">'
+                    f"{risk_tag}</span></div>",
+                    unsafe_allow_html=True,
                 )
+
                 st.divider()
-
                 st.markdown(
-                    "<p class='section-title-sm' style='margin-bottom: 12px;'>Score Baselines</p>",
-                    unsafe_allow_html=True
+                    "<p class='section-title-sm-spaced'>Score Baselines</p>",
+                    unsafe_allow_html=True,
                 )
                 st.markdown("""
                     <div class="baseline-container">
                         <div class="baseline-banner b-low">
                             <div class="baseline-left">
                                 <div class="baseline-dot bg-green"></div>
-                                <span class="baseline-title c-green">Low Risk <span class="baseline-desc">(Auto-Approve Eligible)</span></span>
+                                <span class="baseline-title c-green">Low Risk
+                                    <span class="baseline-desc">(Auto-Approve Eligible)</span>
+                                </span>
                             </div>
                             <span class="baseline-threshold c-green">&lt; 40%</span>
                         </div>
                         <div class="baseline-banner b-mod">
                             <div class="baseline-left">
                                 <div class="baseline-dot bg-orange"></div>
-                                <span class="baseline-title c-orange">Moderate Risk <span class="baseline-desc">(Manual Review)</span></span>
+                                <span class="baseline-title c-orange">Moderate Risk
+                                    <span class="baseline-desc">(Manual Review)</span>
+                                </span>
                             </div>
-                            <span class="baseline-threshold c-orange">40% - 70%</span>
+                            <span class="baseline-threshold c-orange">40% – 70%</span>
                         </div>
                         <div class="baseline-banner b-high">
                             <div class="baseline-left">
                                 <div class="baseline-dot bg-red"></div>
-                                <span class="baseline-title c-red">High Risk <span class="baseline-desc">(Auto-Reject Eligible)</span></span>
+                                <span class="baseline-title c-red">High Risk
+                                    <span class="baseline-desc">(Auto-Reject Eligible)</span>
+                                </span>
                             </div>
                             <span class="baseline-threshold c-red">&gt; 70%</span>
                         </div>
@@ -521,284 +516,373 @@ if page == "Applicant Assessment":
 
             with st.container(border=True):
                 st.markdown("<h3 class='decision-title'>Decision Workflow</h3>", unsafe_allow_html=True)
-                
-                # Use a clean 3-part vertical flow
                 st.caption("1. Review Algorithm Risk Assessment above.")
-                
-                # 2. Collapsible Justification - Only expand if needed (Reduces clutter)
+
                 with st.expander("Decision Justification & Overrides", expanded=False):
                     justification_note = st.text_area(
-                        "Enter rationale for approval/rejection", 
+                        "Enter rationale for approval/rejection",
                         placeholder="Required for manual overrides or exception handling...",
-                        key=f"just_{selected_id}"
+                        key=f"just_{selected_id}",
                     )
-                
+
                 st.markdown("<br>", unsafe_allow_html=True)
-                
-                # 3. Action Row (Buttons pushed to bottom for clear separation)
+
                 action_col1, action_col2 = st.columns(2)
                 with action_col1:
-                    st.button("Reject Application", use_container_width=True, 
-                            on_click=submit_decision, args=(selected_id, "Rejected", id_col, default_prob, risk_tag, app_data, justification_note))
+                    st.markdown("<span class='reject-marker'></span>", unsafe_allow_html=True)
+                    st.button(
+                        "Reject Application",
+                        use_container_width=True,
+                        on_click=submit_decision,
+                        args=(selected_id, "Rejected", id_col, default_prob,
+                              risk_tag, app_data, justification_note),
+                    )
                 with action_col2:
-                    st.button("Approve Application", use_container_width=True, 
-                            on_click=submit_decision, args=(selected_id, "Approved", id_col, default_prob, risk_tag, app_data, justification_note))
+                    st.markdown("<span class='approve-marker'></span>", unsafe_allow_html=True)
+                    st.button(
+                        "Approve Application",
+                        use_container_width=True,
+                        on_click=submit_decision,
+                        args=(selected_id, "Approved", id_col, default_prob,
+                              risk_tag, app_data, justification_note),
+                    )
 
-        # ==========================================
-        # DEEP DIVE ANALYSIS CHARTS
-        # ==========================================
+        # ---- Deep Dive Analysis ----
         st.markdown("<br>", unsafe_allow_html=True)
         st.subheader("Deep Dive Analysis")
 
         chart_col1, chart_col2 = st.columns(2, gap="large")
 
-        # Chart 1: Payment History Trend
         with chart_col1:
             with st.container(border=True):
                 st.markdown("<p class='section-title'>Payment History Trend</p>", unsafe_allow_html=True)
-                st.markdown("<p class='history-desc'>Comparison of billed vs. paid amounts over the last 6 months.</p>", unsafe_allow_html=True)
-                
-                trend_df = utils.get_payment_trend(app_data)
+                st.markdown(
+                    "<p class='history-desc'>Comparison of billed vs. paid amounts over the last 6 months.</p>",
+                    unsafe_allow_html=True,
+                )
+
+                trend_df = mu.get_payment_trend(app_data)
 
                 fig_trend = go.Figure()
                 fig_trend.add_trace(go.Scatter(
-                    x=trend_df['Month'], y=trend_df['Billed Amount'],
+                    x=trend_df["Month"], y=trend_df["Billed Amount"],
                     name="Billed Amount",
-                    line=dict(color="rgba(128, 128, 128, 0.6)", width=3, dash="dot"), 
-                    mode="lines+markers"
+                    line=dict(color="rgba(128, 128, 128, 0.6)", width=3, dash="dot"),
+                    mode="lines+markers",
                 ))
                 fig_trend.add_trace(go.Scatter(
-                    x=trend_df['Month'], y=trend_df['Paid Amount'],
+                    x=trend_df["Month"], y=trend_df["Paid Amount"],
                     name="Paid Amount",
                     line=dict(color="#3b82f6", width=3),
-                    mode="lines+markers"
+                    mode="lines+markers",
                 ))
-                
                 fig_trend.update_layout(
                     margin=dict(l=0, r=0, t=10, b=0),
                     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    yaxis=dict(gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"),
-                    xaxis=dict(showgrid=False)
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis=dict(gridcolor="rgba(128, 128, 128, 0.2)", tickprefix="$"),
+                    xaxis=dict(showgrid=False),
                 )
-                st.plotly_chart(fig_trend, use_container_width=True, config={'displayModeBar': False})
+                st.plotly_chart(fig_trend, use_container_width=True, config={"displayModeBar": False})
 
-        # Chart 2: Risk Factors Analysis
         with chart_col2:
             with st.container(border=True):
                 st.markdown("<p class='section-title'>Risk Factors Analysis</p>", unsafe_allow_html=True)
-                
                 st.markdown("""
-                    <div style='background-color: rgba(128, 128, 128, 0.05); padding: 10px; border-radius: 5px; font-size: 0.9rem; margin-bottom: 15px;'>
+                    <div class='shap-legend'>
                         <b>How to read this chart:</b><br>
-                        <span style='color: #ef4444;'><b>Red bars (+):</b></span> Factors pushing the applicant <b>closer</b> to default.<br>
-                        <span style='color: #22c55e;'><b>Green bars (-):</b></span> Factors pushing the applicant <b>further away</b> from default.<br>
-                        <i>The length of the bar represents the strength of the factor's impact on the final score.</i>
+                        <span class='shap-risk'><b>Red bars (+):</b></span>
+                        Factors pushing the applicant <b>closer</b> to default.<br>
+                        <span class='shap-safe'><b>Green bars (-):</b></span>
+                        Factors pushing the applicant <b>further away</b> from default.<br>
+                        <i>The length of the bar represents the strength of the factor's impact.</i>
                     </div>
                 """, unsafe_allow_html=True)
 
-                factors_df = utils.get_risk_factors(app_data, rf_model, yj_transformer)
-
-                colors = ['#ef4444' if val > 0 else '#22c55e' for val in factors_df['Contribution']]
+                factors_df = mu.get_risk_factors(app_data, rf_model, yj_transformer)
+                colors = ["#ef4444" if v > 0 else "#22c55e" for v in factors_df["Contribution"]]
 
                 fig_factors = go.Figure(go.Bar(
-                    x=factors_df['Contribution'],
-                    y=factors_df['Feature'],
-                    orientation='h',
+                    x=factors_df["Contribution"],
+                    y=factors_df["Feature"],
+                    orientation="h",
                     marker_color=colors,
-                    text=[f"+{v:.2f}" if v > 0 else f"{v:.2f}" for v in factors_df['Contribution']],
-                    textposition='auto'
+                    text=[f"+{v:.2f}" if v > 0 else f"{v:.2f}" for v in factors_df["Contribution"]],
+                    textposition="auto",
                 ))
-                
                 fig_factors.update_layout(
                     margin=dict(l=0, r=0, t=10, b=0),
-                    plot_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor="rgba(0,0,0,0)",
                     xaxis=dict(
-                        showgrid=True, 
-                        gridcolor='rgba(128, 128, 128, 0.2)', 
-                        zeroline=True, 
-                        zerolinecolor='rgba(128, 128, 128, 0.5)'
+                        showgrid=True,
+                        gridcolor="rgba(128, 128, 128, 0.2)",
+                        zeroline=True,
+                        zerolinecolor="rgba(128, 128, 128, 0.5)",
                     ),
-                    yaxis=dict(showgrid=False)
+                    yaxis=dict(showgrid=False),
                 )
-                st.plotly_chart(fig_factors, use_container_width=True, config={'displayModeBar': False})
+                st.plotly_chart(fig_factors, use_container_width=True, config={"displayModeBar": False})
+
+
+# ===========================================================================
+# PAGE: Applicant Archive
+# ===========================================================================
 
 elif page == "Applicant Archive":
     st.title("Applicant Archive")
     st.markdown(
-        "<p class='subtext'>Immutable Point-in-Time (PiT) audit ledger of processed applications.</p>", 
-        unsafe_allow_html=True
+        "<p class='subtext'>Immutable Point-in-Time (PiT) audit ledger of processed applications.</p>",
+        unsafe_allow_html=True,
     )
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    if st.session_state.get('dataset') is not None:
-        # Filter for processed applicants (State is now a dict, not just a string)
+    if st.session_state.get("dataset") is not None:
         processed_data = {
-            k: v for k, v in st.session_state['applicant_states'].items() 
+            k: v
+            for k, v in st.session_state["applicant_states"].items()
             if isinstance(v, dict)
         }
-        
+
         if processed_data:
-            df = st.session_state['dataset']
-            id_col = st.session_state['id_column']
-            
-            # --- 1. BUILD SUMMARY TABLE ---
+            df = st.session_state["dataset"]
+            id_col = st.session_state["id_column"]
+
+            # ----------------------------------------------------------------
+            # Summary table
+            # ----------------------------------------------------------------
             summary_rows = []
             for app_id, audit in processed_data.items():
-                # Detect Maker-Checker Overrides
-                is_override = False
-                if audit['Decision'] == "Approved" and audit['Risk_Tier'] == "HIGH RISK":
-                    is_override = True
-                elif audit['Decision'] == "Rejected" and audit['Risk_Tier'] == "LOW RISK":
-                    is_override = True
-                    
-                # Fetch raw demographic snapshot
+                is_override = (
+                    (audit["Decision"] == "Approved" and audit["Risk_Tier"] == "HIGH RISK")
+                    or (audit["Decision"] == "Rejected" and audit["Risk_Tier"] == "LOW RISK")
+                )
                 raw_row = df[df[id_col].astype(str) == str(app_id)].iloc[0]
-                
                 summary_rows.append({
                     "Applicant ID": str(app_id),
-                    "Age": raw_row.get('AGE', 'N/A'),
-                    "Credit Limit": raw_row.get('LIMIT_BAL', 0),
+                    "Timestamp": audit.get("Timestamp", "—"),
+                    "Age": raw_row.get("AGE", "N/A"),
+                    "Credit Limit": raw_row.get("LIMIT_BAL", 0),
                     "Model Score": f"{audit['Score']}% ({audit['Risk_Tier']})",
-                    "Final Decision": audit['Decision'],
-                    "Delta Flag": "⚠️ OVERRIDE" if is_override else "✅ Aligned"
+                    "Final Decision": audit["Decision"],
+                    "Delta Flag": "⚠️ OVERRIDE" if is_override else "✅ Aligned",
                 })
-                
+
             summary_df = pd.DataFrame(summary_rows)
             st.dataframe(
-                summary_df, 
-                use_container_width=True, 
+                summary_df,
+                use_container_width=True,
                 hide_index=True,
-                column_config={"Credit Limit": st.column_config.NumberColumn(format="$%d")}
+                column_config={
+                    "Credit Limit": st.column_config.NumberColumn(format="$%d"),
+                },
             )
-            
-            st.markdown("<br><h4>Detailed Audit Logs</h4>", unsafe_allow_html=True)
-            
-            # --- 2. BUILD DETAILED EXPANDERS (THE LEDGER) ---
+
+            # ----------------------------------------------------------------
+            # Detailed audit log cards
+            # ----------------------------------------------------------------
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("<h4>Detailed Audit Logs</h4>", unsafe_allow_html=True)
+            st.markdown(
+                "<p class='subtext' style='margin-top:-8px;'>Full point-in-time record for each processed application. Frozen at the moment of decision.</p>",
+                unsafe_allow_html=True,
+            )
+
             for app_id, audit in processed_data.items():
-                
-                # Visual logic for the expander header
-                header_icon = "⚠️" if ("OVERRIDE" in summary_df[summary_df["Applicant ID"] == app_id]["Delta Flag"].values[0]) else "📄"
-                header_title = f"{header_icon} {app_id} | {audit['Decision']} | Machine Score: {audit['Score']}%"
-                
-                with st.expander(header_title):
-                    d_col1, d_col2 = st.columns(2)
-                    
-                    with d_col1:
-                        st.markdown("**🧠 Explainable AI (XAI) Drivers**")
-                        st.caption("Top factors driving this specific risk score:")
-                        for driver in audit['Top_Drivers']:
-                            st.markdown(f"- {driver}")
-                            
-                        st.markdown("<br>**🧑‍💻 Operator Justification**", unsafe_allow_html=True)
-                        st.info(audit['Justification'])
-                        
-                    with d_col2:
-                        st.markdown("**🕒 Point-in-Time History**")
-                        st.caption("Frozen payment status at time of review:")
-                        pit_history = audit['PiT_History']
-                        
-                        # Render a mini-grid for the frozen history
-                        st.code(
-                            f"Current : {pit_history.get('PAY_0', 'N/A')}\n"
-                            f"Month -2: {pit_history.get('PAY_2', 'N/A')}\n"
-                            f"Month -3: {pit_history.get('PAY_3', 'N/A')}\n"
-                            f"Month -4: {pit_history.get('PAY_4', 'N/A')}\n"
-                            f"Month -5: {pit_history.get('PAY_5', 'N/A')}\n"
-                            f"Month -6: {pit_history.get('PAY_6', 'N/A')}"
-                        )
+                decision    = audit["Decision"]
+                score       = audit["Score"]
+                risk_tier   = audit["Risk_Tier"]
+                timestamp   = audit.get("Timestamp", "—")
+                justification = audit["Justification"]
+                top_drivers = audit["Top_Drivers"]
+                pit         = audit["PiT_History"]
+
+                delta_flag  = summary_df[summary_df["Applicant ID"] == app_id]["Delta Flag"].values[0]
+                is_override = "OVERRIDE" in delta_flag
+
+                # Decide card accent colour from decision
+                if decision == "Approved":
+                    accent      = "#22c55e"
+                    decision_bg = "rgba(34,197,94,0.08)"
+                    badge_cls   = "audit-badge-approved"
+                else:
+                    accent      = "#ef4444"
+                    decision_bg = "rgba(239,68,68,0.08)"
+                    badge_cls   = "audit-badge-rejected"
+
+                # Risk tier colour
+                tier_color = {"LOW RISK": "#22c55e", "MODERATE RISK": "#eab308", "HIGH RISK": "#ef4444"}.get(risk_tier, "#888")
+
+                # Payment history rows
+                pit_labels = {
+                    "PAY_0": "Current",
+                    "PAY_2": "Month −2",
+                    "PAY_3": "Month −3",
+                    "PAY_4": "Month −4",
+                    "PAY_5": "Month −5",
+                    "PAY_6": "Month −6",
+                }
+                pit_rows_html = "".join(
+                    f"<div class='audit-pit-row'>"
+                    f"<span class='audit-pit-label'>{lbl}</span>"
+                    f"<span class='audit-pit-val'>{pit.get(col, 'N/A')}</span>"
+                    f"</div>"
+                    for col, lbl in pit_labels.items()
+                )
+
+                # XAI driver pills
+                driver_pills_html = "".join(
+                    f"<span class='audit-driver-pill'>{d}</span>"
+                    for d in top_drivers
+                )
+
+                override_banner = (
+                    f"<div class='audit-override-banner'>⚠️ Operator Override — "
+                    f"Decision does not align with model recommendation</div>"
+                    if is_override else ""
+                )
+
+                st.markdown(f"""
+                <div class="audit-card" style="border-left: 4px solid {accent};">
+
+                    <!-- Header row -->
+                    <div class="audit-card-header">
+                        <div class="audit-header-left">
+                            <span class="audit-app-id">{app_id}</span>
+                            <span class="audit-badge {badge_cls}">{decision}</span>
+                            {('<span class="audit-override-pill">Override</span>' if is_override else '')}
+                        </div>
+                        <div class="audit-header-right">
+                            <span class="audit-timestamp">🕒 {timestamp}</span>
+                        </div>
+                    </div>
+
+                    {override_banner}
+
+                    <!-- Body: three columns -->
+                    <div class="audit-card-body">
+
+                        <!-- Col 1: Score & Risk -->
+                        <div class="audit-section">
+                            <div class="audit-section-label">MODEL ASSESSMENT</div>
+                            <div class="audit-score-val" style="color:{accent};">{score}%</div>
+                            <div class="audit-tier-pill" style="color:{tier_color}; border-color:{tier_color}40; background:{tier_color}10;">
+                                {risk_tier}
+                            </div>
+                        </div>
+
+                        <!-- Col 2: XAI Drivers -->
+                        <div class="audit-section audit-section-mid">
+                            <div class="audit-section-label">TOP RISK DRIVERS</div>
+                            <div class="audit-drivers-wrap">{driver_pills_html}</div>
+                            <div class="audit-section-label" style="margin-top:14px;">OPERATOR JUSTIFICATION</div>
+                            <div class="audit-justification">"{justification}"</div>
+                        </div>
+
+                        <!-- Col 3: PiT History -->
+                        <div class="audit-section">
+                            <div class="audit-section-label">POINT-IN-TIME HISTORY</div>
+                            <div class="audit-pit-grid">{pit_rows_html}</div>
+                        </div>
+
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
         else:
             st.info("No applicants have been processed yet. Decisions made in the Assessment tab will appear here.")
     else:
         st.warning("Please upload a dataset in the Applicant Assessment tab to begin tracking history.")
 
+
+# ===========================================================================
+# PAGE: Batch Analytics
+# ===========================================================================
+
 elif page == "Batch Analytics":
     st.title("Batch Analytics")
     st.markdown(
         "<p class='subtext'>Macro-level demographic and financial analysis of the currently uploaded applicant batch.</p>",
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    if st.session_state.get('dataset') is not None:
-        df = st.session_state['dataset']
-        
-        # --- Batch KPIs ---
+    if st.session_state.get("dataset") is not None:
+        df = st.session_state["dataset"]
+
         total_applicants = len(df)
-        
-        # Safely force data to numeric, ignoring text or blank spaces
-        if 'AGE' in df.columns:
-            age_mean = pd.to_numeric(df['AGE'], errors='coerce').mean()
-            avg_age = int(age_mean) if pd.notna(age_mean) else 0
-        else:
-            avg_age = 0
-            
-        if 'LIMIT_BAL' in df.columns:
-            limit_mean = pd.to_numeric(df['LIMIT_BAL'], errors='coerce').mean()
-            avg_limit = limit_mean if pd.notna(limit_mean) else 0
-        else:
-            avg_limit = 0
-        
-        # Calculate how many have been processed vs pending
-        processed_count = sum(1 for status in st.session_state['applicant_states'].values() if status != "Pending")
-        completion_rate = (processed_count / total_applicants) * 100 if total_applicants > 0 else 0
+
+        avg_age = int(pd.to_numeric(df["AGE"], errors="coerce").mean()) if "AGE" in df.columns else 0
+        avg_limit = pd.to_numeric(df["LIMIT_BAL"], errors="coerce").mean() if "LIMIT_BAL" in df.columns else 0
+        avg_limit = avg_limit if pd.notna(avg_limit) else 0
+
+        processed_count = sum(
+            1 for s in st.session_state["applicant_states"].values() if s != "Pending"
+        )
+        completion_rate = (processed_count / total_applicants * 100) if total_applicants > 0 else 0
 
         st.markdown(f"""
             <div class="kpi-grid">
-                <div class="kpi-card"><div class="kpi-label">Batch Size</div><div class="kpi-val">{total_applicants}</div></div>
-                <div class="kpi-card"><div class="kpi-label">Avg. Credit Limit</div><div class="kpi-val">${avg_limit:,.0f}</div></div>
-                <div class="kpi-card"><div class="kpi-label">Avg. Applicant Age</div><div class="kpi-val">{avg_age}</div></div>
-                <div class="kpi-card"><div class="kpi-label">Batch Completion</div><div class="kpi-val">{completion_rate:.1f}%</div></div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Batch Size</div>
+                    <div class="kpi-val">{total_applicants}</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Avg. Credit Limit</div>
+                    <div class="kpi-val">${avg_limit:,.0f}</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Avg. Applicant Age</div>
+                    <div class="kpi-val">{avg_age}</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-label">Batch Completion</div>
+                    <div class="kpi-val">{completion_rate:.1f}%</div>
+                </div>
             </div>
         """, unsafe_allow_html=True)
+
         st.markdown("<br>", unsafe_allow_html=True)
 
-        # --- Dynamic Batch Visualizations ---
+        # --- Demographic charts ---
         st.subheader("Batch Demographics")
         chart_col1, chart_col2 = st.columns(2, gap="large")
 
         with chart_col1:
             with st.container(border=True):
                 st.markdown("<p class='section-title'>Gender Distribution</p>", unsafe_allow_html=True)
-                
-                # Safely map gender if the column exists
-                if 'SEX' in df.columns:
-                    gender_counts = df['SEX'].apply(map_sex).value_counts()
-                    
+
+                if "SEX" in df.columns:
+                    gender_counts = df["SEX"].apply(du.map_sex).value_counts()
                     fig_gender = go.Figure(data=[go.Pie(
                         labels=gender_counts.index,
                         values=gender_counts.values,
                         hole=0.6,
-                        marker_colors=["#3b82f6", "rgba(128, 128, 128, 0.4)"]
+                        marker_colors=["#3b82f6", "rgba(128, 128, 128, 0.4)"],
                     )])
-                    
                     fig_gender.update_layout(
                         height=250, margin=dict(l=0, r=0, t=10, b=0),
-                        showlegend=True, plot_bgcolor='rgba(0,0,0,0)'
+                        showlegend=True, plot_bgcolor="rgba(0,0,0,0)",
                     )
-                    st.plotly_chart(fig_gender, use_container_width=True, config={'displayModeBar': False})
+                    st.plotly_chart(fig_gender, use_container_width=True, config={"displayModeBar": False})
                 else:
                     st.info("Gender data not found in this batch.")
 
         with chart_col2:
             with st.container(border=True):
                 st.markdown("<p class='section-title'>Age Distribution</p>", unsafe_allow_html=True)
-                
-                if 'AGE' in df.columns:
+
+                if "AGE" in df.columns:
                     fig_age = go.Figure(data=[go.Histogram(
-                        x=df['AGE'],
-                        nbinsx=15,
-                        marker_color="#22c55e",
-                        opacity=0.8
+                        x=df["AGE"], nbinsx=15,
+                        marker_color="#22c55e", opacity=0.8,
                     )])
-                    
                     fig_age.update_layout(
                         height=250, margin=dict(l=0, r=0, t=10, b=0),
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        yaxis=dict(showgrid=True, gridcolor='rgba(128, 128, 128, 0.2)', title="Count"),
-                        xaxis=dict(showgrid=False, title="Age")
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        yaxis=dict(showgrid=True, gridcolor="rgba(128, 128, 128, 0.2)", title="Count"),
+                        xaxis=dict(showgrid=False, title="Age"),
                     )
-                    st.plotly_chart(fig_age, use_container_width=True, config={'displayModeBar': False})
+                    st.plotly_chart(fig_age, use_container_width=True, config={"displayModeBar": False})
                 else:
                     st.info("Age data not found in this batch.")
 
@@ -806,38 +890,43 @@ elif page == "Batch Analytics":
         st.markdown("<br>", unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown("<p class='section-title'>Credit Exposure by Education Level</p>", unsafe_allow_html=True)
-            
-            if 'EDUCATION' in df.columns and 'LIMIT_BAL' in df.columns:
-                mapped_edu = df['EDUCATION'].apply(map_education)
-                
+
+            if "EDUCATION" in df.columns and "LIMIT_BAL" in df.columns:
+                mapped_edu = df["EDUCATION"].apply(du.map_education)
+
                 fig_box = go.Figure()
                 for edu_level in mapped_edu.unique():
                     fig_box.add_trace(go.Box(
-                        y=df[mapped_edu == edu_level]['LIMIT_BAL'], 
+                        y=df[mapped_edu == edu_level]["LIMIT_BAL"],
                         name=edu_level,
-                        boxpoints=False
+                        boxpoints=False,
                     ))
-                
                 fig_box.update_layout(
                     height=350, margin=dict(l=0, r=0, t=10, b=0),
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    yaxis=dict(showgrid=True, gridcolor='rgba(128, 128, 128, 0.2)', tickprefix="$"),
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    yaxis=dict(showgrid=True, gridcolor="rgba(128, 128, 128, 0.2)", tickprefix="$"),
                     xaxis=dict(showgrid=False),
-                    showlegend=False
+                    showlegend=False,
                 )
-                st.plotly_chart(fig_box, use_container_width=True, config={'displayModeBar': False})
+                st.plotly_chart(fig_box, use_container_width=True, config={"displayModeBar": False})
             else:
                 st.info("Education or Credit Limit data not found in this batch.")
-
     else:
-        # Empty state if they haven't uploaded an Excel file yet
-        st.warning("Please navigate to the **Applicant Assessment** tab and upload a batch dataset to view portfolio analytics.")
+        st.warning(
+            "Please navigate to the **Applicant Assessment** tab and upload a "
+            "batch dataset to view portfolio analytics."
+        )
+
+
+# ===========================================================================
+# PAGE: Engine Diagnostics
+# ===========================================================================
 
 elif page == "Engine Diagnostics":
     st.title("Engine Diagnostics")
     st.markdown(
-        "<p class='subtext'>Transparency and Explainable AI (XAI) for the core prediction engine.</p>", 
-        unsafe_allow_html=True
+        "<p class='subtext'>Transparency and Explainable AI (XAI) for the core prediction engine.</p>",
+        unsafe_allow_html=True,
     )
     st.markdown("<hr/>", unsafe_allow_html=True)
 
@@ -846,16 +935,18 @@ elif page == "Engine Diagnostics":
     with col1:
         st.subheader("Model Architecture")
         st.info("**Pipeline:** Yeo-Johnson Transformer ➔ Random Forest Classifier")
-        
+
         with st.container(border=True):
             st.markdown("<p class='section-title'>Hyperparameters</p>", unsafe_allow_html=True)
-            params = utils.get_model_params(rf_model)
-            
+            params = mu.get_model_params(rf_model)
+
             for key, val in params.items():
                 st.markdown(
-                    f"<div class='profile-item'><span class='profile-label'>{key}</span><br>"
-                    f"<span class='profile-value' style='font-size: 1rem;'>{val}</span></div>",
-                    unsafe_allow_html=True
+                    f"<div class='profile-item'>"
+                    f"<span class='profile-label'>{key}</span><br>"
+                    f"<span class='profile-value'>{val}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True,
                 )
 
     with col2:
@@ -863,46 +954,44 @@ elif page == "Engine Diagnostics":
         with st.container(border=True):
             st.markdown("<p class='section-title'>Top 10 Drivers of Default Risk</p>", unsafe_allow_html=True)
             st.markdown(
-                "<p class='history-desc'>This chart displays the most influential variables the algorithm uses to evaluate risk across the entire applicant population.</p>", 
-                unsafe_allow_html=True
+                "<p class='history-desc'>This chart displays the most influential variables "
+                "the algorithm uses to evaluate risk across the entire applicant population.</p>",
+                unsafe_allow_html=True,
             )
-            
-            importance_df = utils.get_global_feature_importance(rf_model)
-            
+
+            importance_df = mu.get_global_feature_importance(rf_model)
+
             fig_global = go.Figure(go.Bar(
-                x=importance_df['Importance'],
-                y=importance_df['Feature'],
-                orientation='h',
-                marker_color='#3b82f6', # Sleek UI Blue
-                text=[f"{v:.3f}" for v in importance_df['Importance']],
-                textposition='auto'
+                x=importance_df["Importance"],
+                y=importance_df["Feature"],
+                orientation="h",
+                marker_color="#3b82f6",
+                text=[f"{v:.3f}" for v in importance_df["Importance"]],
+                textposition="auto",
             ))
-            
             fig_global.update_layout(
                 margin=dict(l=0, r=0, t=10, b=0),
-                plot_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor="rgba(0,0,0,0)",
                 xaxis=dict(
-                    showgrid=True, 
-                    gridcolor='rgba(128, 128, 128, 0.2)',
-                    title="Relative Importance Weight"
+                    showgrid=True,
+                    gridcolor="rgba(128, 128, 128, 0.2)",
+                    title="Relative Importance Weight",
                 ),
-                yaxis=dict(showgrid=False)
+                yaxis=dict(showgrid=False),
             )
-            st.plotly_chart(fig_global, use_container_width=True, config={'displayModeBar': False})
+            st.plotly_chart(fig_global, use_container_width=True, config={"displayModeBar": False})
 
-    # ==========================================
-    # THREAT MATRIX & KPIs
-    # ==========================================
+    # --- Performance metrics ---
     st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("Model Performance (Threat Matrix)")
     st.markdown(
-        "<p class='history-desc'>Evaluating the engine's ability to balance False Positives (lost revenue) against False Negatives (financial loss) on the testing dataset.</p>",
-        unsafe_allow_html=True
+        "<p class='history-desc'>Evaluating the engine's ability to balance False Positives "
+        "(lost revenue) against False Negatives (financial loss) on the testing dataset.</p>",
+        unsafe_allow_html=True,
     )
 
-    kpis, cm = utils.get_model_metrics()
+    kpis, cm = mu.get_model_metrics()
 
-    # 1. Render the Custom KPI Cards
     st.markdown(f"""
         <div class="kpi-grid">
             <div class="kpi-card"><div class="kpi-label">Accuracy</div><div class="kpi-val">{kpis['Accuracy']}</div></div>
@@ -912,30 +1001,27 @@ elif page == "Engine Diagnostics":
         </div>
     """, unsafe_allow_html=True)
 
-    # 2. Render the Confusion Matrix Heatmap
     with st.container(border=True):
         st.markdown("<p class='section-title'>Confusion Matrix</p>", unsafe_allow_html=True)
 
-        z_data = [cm[1], cm[0]] 
+        z_data = [cm[1], cm[0]]   # [[FN, TP], [TN, FP]] for heatmap orientation
 
         fig_cm = go.Figure(data=go.Heatmap(
             z=z_data,
-            x=['Predicted: Paid', 'Predicted: Default'],
-            y=['Actual: Default', 'Actual: Paid'],
-            colorscale=[[0, 'rgba(128, 128, 128, 0.1)'], [1, '#3b82f6']],
+            x=["Predicted: Paid", "Predicted: Default"],
+            y=["Actual: Default", "Actual: Paid"],
+            colorscale=[[0, "rgba(128, 128, 128, 0.1)"], [1, "#3b82f6"]],
             text=[[f"<b>{v}</b>" for v in row] for row in z_data],
             texttemplate="%{text}",
             textfont={"size": 18, "color": "var(--text-color)"},
             showscale=False,
-            hoverinfo="none"
+            hoverinfo="none",
         ))
-
         fig_cm.update_layout(
             height=250,
             margin=dict(l=0, r=0, t=10, b=0),
-            plot_bgcolor='rgba(0,0,0,0)',
-            xaxis=dict(side='bottom', showgrid=False, tickfont=dict(size=14)),
-            yaxis=dict(showgrid=False, tickfont=dict(size=14))
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(side="bottom", showgrid=False, tickfont=dict(size=14)),
+            yaxis=dict(showgrid=False, tickfont=dict(size=14)),
         )
-
-        st.plotly_chart(fig_cm, use_container_width=True, config={'displayModeBar': False})
+        st.plotly_chart(fig_cm, use_container_width=True, config={"displayModeBar": False})

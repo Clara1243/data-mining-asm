@@ -184,6 +184,63 @@
     letter-spacing: 0.5px;
 }
 
+/* --- Final Decision Action Buttons --- */
+
+/* Reject Button (Red) */
+div.element-container:has(.reject-marker) + div.element-container button {
+    background-color: #ef4444 !important;
+    border-color: #ef4444 !important;
+    color: white !important;
+    transition: all 0.2s ease;
+}
+div.element-container:has(.reject-marker) + div.element-container button:hover {
+    background-color: #dc2626 !important;
+    border-color: #dc2626 !important;
+    color: white !important;
+}
+
+/* Approve Button (Green) */
+div.element-container:has(.approve-marker) + div.element-container button {
+    background-color: #22c55e !important;
+    border-color: #22c55e !important;
+    color: white !important;
+    transition: all 0.2s ease;
+}
+div.element-container:has(.approve-marker) + div.element-container button:hover {
+    background-color: #16a34a !important;
+    border-color: #16a34a !important;
+    color: white !important;
+}
+
+
+/* --- Page Subtitles --- */
+.subtext {
+    font-size: 0.9rem;
+    color: var(--text-color);
+    opacity: 0.7;
+    margin-top: -10px;
+    margin-bottom: 10px;
+}
+
+/* --- Risk Factors Chart Legend --- */
+.shap-legend {
+    background-color: rgba(128, 128, 128, 0.05);
+    padding: 10px;
+    border-radius: 5px;
+    font-size: 0.9rem;
+    margin-bottom: 15px;
+}
+.shap-risk { color: #ef4444; }
+.shap-safe { color: #22c55e; }
+
+/* --- Spacing modifiers --- */
+.section-title-sm-spaced {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: inherit;
+    margin-bottom: 12px;
+}
+
 /* --- KPI Metrics Grid --- */
 .kpi-grid {
     display: grid;
@@ -213,3 +270,205 @@
 }
 
 
+/* ============================================================
+   AUDIT LOG CARDS  (Applicant Archive – Detailed Logs)
+   ============================================================ */
+
+/* Outer card */
+.audit-card {
+    background-color: rgba(128, 128, 128, 0.04);
+    border: 1px solid rgba(128, 128, 128, 0.18);
+    border-radius: 10px;
+    padding: 0;
+    margin-bottom: 16px;
+    overflow: hidden;
+}
+
+/* ---- Header bar ---- */
+.audit-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 20px 12px 20px;
+    border-bottom: 1px solid rgba(128, 128, 128, 0.12);
+    background-color: rgba(128, 128, 128, 0.04);
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.audit-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.audit-header-right {
+    display: flex;
+    align-items: center;
+}
+
+.audit-app-id {
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    color: inherit;
+}
+
+.audit-timestamp {
+    font-size: 0.78rem;
+    color: inherit;
+    opacity: 0.5;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* Decision badge */
+.audit-badge {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 20px;
+}
+.audit-badge-approved {
+    background-color: rgba(34, 197, 94, 0.12);
+    color: #22c55e;
+    border: 1px solid rgba(34, 197, 94, 0.35);
+}
+.audit-badge-rejected {
+    background-color: rgba(239, 68, 68, 0.12);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+/* Override pill in header */
+.audit-override-pill {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 20px;
+    background-color: rgba(234, 179, 8, 0.12);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.35);
+}
+
+/* Override warning banner (below header, above body) */
+.audit-override-banner {
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: #eab308;
+    background-color: rgba(234, 179, 8, 0.07);
+    border-bottom: 1px solid rgba(234, 179, 8, 0.2);
+    padding: 7px 20px;
+    letter-spacing: 0.2px;
+}
+
+/* ---- Body: three-column grid ---- */
+.audit-card-body {
+    display: grid;
+    grid-template-columns: 180px 1fr 200px;
+    gap: 0;
+    padding: 0;
+}
+
+.audit-section {
+    padding: 18px 20px;
+}
+
+/* Middle column: slight side borders to act as dividers */
+.audit-section-mid {
+    border-left: 1px solid rgba(128, 128, 128, 0.12);
+    border-right: 1px solid rgba(128, 128, 128, 0.12);
+}
+
+/* Section micro-label */
+.audit-section-label {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: inherit;
+    opacity: 0.45;
+    margin-bottom: 10px;
+}
+
+/* Score number */
+.audit-score-val {
+    font-size: 2.2rem;
+    font-weight: 800;
+    line-height: 1;
+    margin-bottom: 10px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Risk tier inline pill */
+.audit-tier-pill {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 20px;
+    border: 1px solid;
+}
+
+/* XAI driver pills */
+.audit-drivers-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.audit-driver-pill {
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background-color: rgba(59, 130, 246, 0.1);
+    color: #3b82f6;
+    border: 1px solid rgba(59, 130, 246, 0.25);
+}
+
+/* Operator justification quote */
+.audit-justification {
+    font-size: 0.82rem;
+    font-style: italic;
+    color: inherit;
+    opacity: 0.7;
+    line-height: 1.5;
+    background-color: rgba(128, 128, 128, 0.05);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-top: 6px;
+}
+
+/* PiT history table */
+.audit-pit-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.audit-pit-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 8px;
+    border-radius: 5px;
+    background-color: rgba(128, 128, 128, 0.05);
+    border: 1px solid rgba(128, 128, 128, 0.1);
+}
+.audit-pit-label {
+    font-size: 0.75rem;
+    color: inherit;
+    opacity: 0.6;
+}
+.audit-pit-val {
+    font-size: 0.8rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: inherit;
+}

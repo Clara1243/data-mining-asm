@@ -1,313 +1,364 @@
+"""
+model_utils.py
+--------------
+Handles all machine-learning concerns:
+  - Loading the trained pipeline and transformer from disk
+  - Feature alignment and preparation for inference
+  - Prediction (probability output)
+  - SHAP-based local explanations
+  - Global feature importance
+  - Model hyperparameter introspection
+  - Static evaluation metrics (accuracy, confusion matrix, etc.)
+  - Historical EDA / association-rule data for the diagnostics page
+
+"""
+
 import os
-import pandas as pd
-import streamlit as st
+
 import joblib
-import shap
 import numpy as np
+import pandas as pd
+import shap
+import streamlit as st
+
+
+# ---------------------------------------------------------------------------
+# Model loading
+# ---------------------------------------------------------------------------
 
 def load_credit_models():
-    # 1. Get the directory where model_utils.py lives (the 'app' folder)
+    """
+    Loads the champion Random Forest pipeline and the Yeo-Johnson transformer
+    from the sibling ``model/`` directory.
+
+    Returns
+    -------
+    rf_model : sklearn Pipeline
+    yj_transformer : sklearn PowerTransformer
+    """
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # 2. Step UP one level to the project root, then DOWN into the 'model' folder
     project_root = os.path.dirname(current_dir)
     model_dir = os.path.join(project_root, "model")
-    
-    # 3. Define the exact paths
+
     rf_path = os.path.join(model_dir, "champion_rf_pipeline.joblib")
     yj_path = os.path.join(model_dir, "yeo_johnson_transformer.joblib")
-    
-    # 4. Safety Check
+
     if not os.path.exists(rf_path):
-        st.error(f"🛑 CRITICAL ERROR: Cannot find the Random Forest model!\n\nPython is searching exactly here: `{rf_path}`")
-        st.stop()
-        
-    if not os.path.exists(yj_path):
-        st.error(f"🛑 CRITICAL ERROR: Cannot find the Transformer model!\n\nPython is searching exactly here: `{yj_path}`")
+        st.error(
+            f"🛑 CRITICAL ERROR: Cannot find the Random Forest model!\n\n"
+            f"Python is searching exactly here: `{rf_path}`"
+        )
         st.stop()
 
-    # 5. Load models if paths are valid
+    if not os.path.exists(yj_path):
+        st.error(
+            f"🛑 CRITICAL ERROR: Cannot find the Transformer model!\n\n"
+            f"Python is searching exactly here: `{yj_path}`"
+        )
+        st.stop()
+
     rf_model = joblib.load(rf_path)
     yj_transformer = joblib.load(yj_path)
-    
+
     return rf_model, yj_transformer
 
-def map_columns(df):
-    """Maps raw X1-X23 columns from the uploaded dataset to actual feature names."""
-    mapping = {
-        'X1': 'LIMIT_BAL', 'X2': 'SEX', 'X3': 'EDUCATION', 'X4': 'MARRIAGE', 
-        'X5': 'AGE', 'X6': 'PAY_0', 'X7': 'PAY_2', 'X8': 'PAY_3', 'X9': 'PAY_4', 
-        'X10': 'PAY_5', 'X11': 'PAY_6', 'X12': 'BILL_AMT1', 'X13': 'BILL_AMT2', 
-        'X14': 'BILL_AMT3', 'X15': 'BILL_AMT4', 'X16': 'BILL_AMT5', 'X17': 'BILL_AMT6', 
-        'X18': 'PAY_AMT1', 'X19': 'PAY_AMT2', 'X20': 'PAY_AMT3', 
-        'X21': 'PAY_AMT4', 'X22': 'PAY_AMT5', 'X23': 'PAY_AMT6'
-    }
-    return df.rename(columns=mapping)
 
-def repair_dataset_schema(df):
-    """
-    Industrial approach: Instead of rejecting the file, we dynamically 
-    inject missing columns with conservative statistical baselines.
-    """
-    
-    safe_defaults = {
-        'LIMIT_BAL': 50000,  # Conservative baseline limit
-        'SEX': 2,            # 2 = Female (or mode of your dataset)
-        'EDUCATION': 4,      # 4 = Others/Unknown
-        'MARRIAGE': 3,       # 3 = Others/Unknown
-        'AGE': 35,           # Median age
-        
-        # Default Payment Status (0 = Revolving / Average behavior)
-        'PAY_0': 0, 'PAY_2': 0, 'PAY_3': 0, 'PAY_4': 0, 'PAY_5': 0, 'PAY_6': 0, 
-        
-        # Default Billing Amounts (Assume $0 if not provided)
-        'BILL_AMT1': 0, 'BILL_AMT2': 0, 'BILL_AMT3': 0, 
-        'BILL_AMT4': 0, 'BILL_AMT5': 0, 'BILL_AMT6': 0,
-        
-        # Default Payment Amounts (Assume $0 if not provided)
-        'PAY_AMT1': 0, 'PAY_AMT2': 0, 'PAY_AMT3': 0, 
-        'PAY_AMT4': 0, 'PAY_AMT5': 0, 'PAY_AMT6': 0
-    }
-    
-    missing_detected = []
-    
-    # Check for missing columns and inject the default values
-    for col, default_val in safe_defaults.items():
-        if col not in df.columns:
-            df[col] = default_val
-            missing_detected.append(col)
-            
-    return df, missing_detected
+# ---------------------------------------------------------------------------
+# Feature preparation
+# ---------------------------------------------------------------------------
 
 def prepare_features(app_row, rf_model):
-    drop_cols = ['ID', 'UNNAMED: 0', 'DEFAULT PAYMENT NEXT MONTH', 'Y']
-    features_raw = app_row.drop(labels=drop_cols, errors='ignore')
-    
-    features_numeric = pd.to_numeric(features_raw, errors='coerce')
+    """
+    Converts a raw applicant row (pandas Series) into a feature DataFrame
+    that is aligned with the columns the pipeline was trained on.
+
+    Parameters
+    ----------
+    app_row  : pd.Series  – one applicant record
+    rf_model : sklearn Pipeline
+
+    Returns
+    -------
+    features_aligned : pd.DataFrame  (1 row)
+    """
+    drop_cols = ["ID", "UNNAMED: 0", "DEFAULT PAYMENT NEXT MONTH", "Y"]
+    features_raw = app_row.drop(labels=drop_cols, errors="ignore")
+
+    features_numeric = pd.to_numeric(features_raw, errors="coerce")
     features_df = pd.DataFrame([features_numeric])
 
-    if str(app_row.get('IS_NEW_APPLICANT', 'False')).strip().lower() in ['true', '1', '1.0', 'yes', 't']:
-        features_df['PAY_0'] = features_df['PAY_2'] = features_df['PAY_3'] = -2
-        features_df['PAY_4'] = features_df['PAY_5'] = features_df['PAY_6'] = -2
+    # Override history columns for brand-new applicants
+    if str(app_row.get("IS_NEW_APPLICANT", "False")).strip().lower() in [
+        "true", "1", "1.0", "yes", "t"
+    ]:
+        for col in ["PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6"]:
+            features_df[col] = -2
         for i in range(1, 7):
-            features_df[f'BILL_AMT{i}'] = 0
-            features_df[f'PAY_AMT{i}'] = 0
-    
-    if 'AGE' in features_df.columns:
-        features_df['AGE'] = features_df['AGE'].fillna(35) # Median age
-    if 'LIMIT_BAL' in features_df.columns:
-        features_df['LIMIT_BAL'] = features_df['LIMIT_BAL'].fillna(100000)
-        
-    # Categorical variables: Fill missing with 'Unknown' or mode
-    if 'EDUCATION' in features_df.columns:
-        features_df['EDUCATION'] = features_df['EDUCATION'].fillna(4) # 4 = Others
-    if 'MARRIAGE' in features_df.columns:
-        features_df['MARRIAGE'] = features_df['MARRIAGE'].fillna(3) # 3 = Others
-        
-    # Financial history: Fill missing with 0 (assuming no activity if left blank)
-    features_df = features_df.fillna(0) 
-    
-    if hasattr(rf_model, 'feature_names_in_'):
-        expected_cols = rf_model.feature_names_in_
-        features_aligned = features_df.reindex(columns=expected_cols, fill_value=0)
+            features_df[f"BILL_AMT{i}"] = 0
+            features_df[f"PAY_AMT{i}"] = 0
+
+    # Conservative fill-ins for common demographic fields
+    features_df["AGE"] = features_df.get("AGE", pd.Series([35])).fillna(35)
+    features_df["LIMIT_BAL"] = features_df.get("LIMIT_BAL", pd.Series([100_000])).fillna(100_000)
+    features_df["EDUCATION"] = features_df.get("EDUCATION", pd.Series([4])).fillna(4)
+    features_df["MARRIAGE"] = features_df.get("MARRIAGE", pd.Series([3])).fillna(3)
+
+    features_df = features_df.fillna(0)
+
+    if hasattr(rf_model, "feature_names_in_"):
+        features_aligned = features_df.reindex(
+            columns=rf_model.feature_names_in_, fill_value=0
+        )
     else:
         features_aligned = features_df
-        
+
     return features_aligned
 
+
+# ---------------------------------------------------------------------------
+# Prediction
+# ---------------------------------------------------------------------------
+
 def process_and_predict(app_row, rf_model, yj_transformer=None):
-    """Calculates the probability using the end-to-end Random Forest pipeline."""
-    # We pass the raw aligned features. The pipeline handles its own internal transformations!
+    """
+    Returns the default probability (0–100) for a single applicant row.
+
+    The pipeline handles all internal transformations; ``yj_transformer``
+    is accepted for API compatibility but is not applied here directly.
+    """
     features_final = prepare_features(app_row, rf_model)
-    
     probs = rf_model.predict_proba(features_final)
     return probs[0][1] * 100
 
-def get_payment_trend(app_row):
-    """Transforms raw row into a time-series DataFrame for the line chart."""
-    months = ['5 Mo Ago', '4 Mo Ago', '3 Mo Ago', '2 Mo Ago', '1 Mo Ago', 'Current']
-    bills = [pd.to_numeric(app_row.get(f'BILL_AMT{i}', 0), errors='coerce') for i in range(6, 0, -1)]
-    pays = [pd.to_numeric(app_row.get(f'PAY_AMT{i}', 0), errors='coerce') for i in range(6, 0, -1)]
-    return pd.DataFrame({'Month': months, 'Billed Amount': bills, 'Paid Amount': pays})
+
+# ---------------------------------------------------------------------------
+# SHAP – local explanations
+# ---------------------------------------------------------------------------
 
 def get_risk_factors(app_row, rf_model, yj_transformer=None):
-    """Uses SHAP to explain the Random Forest decision for the UI chart."""
+    """
+    Uses SHAP TreeExplainer to rank the top 5 feature contributions for a
+    single applicant.  Returns a DataFrame sorted ascending by contribution
+    (negative = protective, positive = risk-increasing).
+
+    Parameters
+    ----------
+    app_row        : pd.Series
+    rf_model       : sklearn Pipeline
+    yj_transformer : ignored (kept for API compatibility)
+
+    Returns
+    -------
+    pd.DataFrame with columns: Feature, Contribution, Abs_Contribution
+    """
     features_final = prepare_features(app_row, rf_model)
-    
-    # Push the data through all preprocessing steps first
+
+    # Push data through all preprocessing steps, extract the estimator
     Xt = features_final
-    if hasattr(rf_model, 'steps'):
-        for name, transformer in rf_model.steps[:-1]:
+    if hasattr(rf_model, "steps"):
+        for _, transformer in rf_model.steps[:-1]:
             Xt = transformer.transform(Xt)
         estimator = rf_model.steps[-1][1]
     else:
         estimator = rf_model
-        
+
     explainer = shap.TreeExplainer(estimator)
     shap_values_raw = explainer.shap_values(Xt)
-    
-    # --- THE ULTIMATE FIX: SHAP Version-Proof Extraction ---
-    # 1. Handle newer SHAP Explanation objects
-    if hasattr(shap_values_raw, 'values'):
-        vals = shap_values_raw.values
-    else:
-        vals = shap_values_raw
-        
-    # 2. Handle older List format (binary classification)
+
+    # Version-proof SHAP extraction
+    vals = shap_values_raw.values if hasattr(shap_values_raw, "values") else shap_values_raw
     if isinstance(vals, list):
-        vals = vals[1]  # Extract positive class
-        
-    # 3. Convert whatever is left into a strict numpy array
+        vals = vals[1]                     # binary classification: positive class
     vals = np.array(vals)
-    
-    # 4. If SHAP returned a 3D array: (n_samples, n_features, n_classes)
     if len(vals.shape) == 3:
-        vals = vals[:, :, 1]  # Extract positive class
-        
-    # 5. Extract the single applicant's row and force it into standard floats
+        vals = vals[:, :, 1]              # (n_samples, n_features, n_classes)
+
     contributions = [float(x) for x in np.array(vals[0]).flatten()]
-    # -----------------------------------------------------------
-    
-    if hasattr(estimator, 'feature_names_in_'):
+
+    # Resolve feature names after preprocessing
+    if hasattr(estimator, "feature_names_in_"):
         expected_cols = estimator.feature_names_in_
-    elif hasattr(Xt, 'columns'):
+    elif hasattr(Xt, "columns"):
         expected_cols = Xt.columns.tolist()
     else:
         expected_cols = features_final.columns.tolist()
-        
-    factors = [{'Feature': expected_cols[i], 'Contribution': contributions[i]} for i in range(len(expected_cols))]
-    df = pd.DataFrame(factors)
-    
-    # Pandas can now safely sort this because it's guaranteed to be standard floats
-    df['Abs_Contribution'] = df['Contribution'].abs()
-    df = df.sort_values(by='Abs_Contribution', ascending=False).head(5)
-    
-    # Clean up complex names if the pipeline altered them (e.g., 'remainder__BILL_AMT1')
-    df['Feature'] = df['Feature'].str.split('__').str[-1]
-    
-    # Human-readable dictionary mapping
-    feature_dictionary = {
-        'LIMIT_BAL': 'Total Credit Limit', 'SEX': 'Gender', 'EDUCATION': 'Education Level',
-        'MARRIAGE': 'Marital Status', 'AGE': 'Applicant Age', 'PAY_0': 'Current Payment Status',
-        'PAY_2': 'Payment Status (2 Mo Ago)', 'PAY_3': 'Payment Status (3 Mo Ago)',
-        'PAY_4': 'Payment Status (4 Mo Ago)', 'PAY_5': 'Payment Status (5 Mo Ago)',
-        'PAY_6': 'Payment Status (6 Mo Ago)', 'BILL_AMT1': 'Current Billed Amount',
-        'BILL_AMT2': 'Billed Amount (2 Mo Ago)', 'BILL_AMT3': 'Billed Amount (3 Mo Ago)',
-        'BILL_AMT4': 'Billed Amount (4 Mo Ago)', 'BILL_AMT5': 'Billed Amount (5 Mo Ago)',
-        'BILL_AMT6': 'Billed Amount (6 Mo Ago)', 'PAY_AMT1': 'Current Paid Amount',
-        'PAY_AMT2': 'Paid Amount (2 Mo Ago)', 'PAY_AMT3': 'Paid Amount (3 Mo Ago)',
-        'PAY_AMT4': 'Paid Amount (4 Mo Ago)', 'PAY_AMT5': 'Paid Amount (5 Mo Ago)',
-        'PAY_AMT6': 'Paid Amount (6 Mo Ago)'
-    }
-    
-    df['Feature'] = df['Feature'].map(lambda x: feature_dictionary.get(x, x))
-    return df.sort_values(by='Contribution', ascending=True)
 
-def get_model_params(rf_model):
-    """Extracts core hyperparameters from the Random Forest estimator."""
-    estimator = rf_model.steps[-1][1] if hasattr(rf_model, 'steps') else rf_model
-    params = estimator.get_params()
-    
-    return {
-        "Number of Estimators (Trees)": params.get('n_estimators', 'N/A'),
-        "Max Depth": params.get('max_depth', 'None (Unlimited)'),
-        "Min Samples Split": params.get('min_samples_split', 'N/A'),
-        "Criterion": params.get('criterion', 'N/A').capitalize()
-    }
+    df = pd.DataFrame(
+        [{"Feature": expected_cols[i], "Contribution": contributions[i]}
+         for i in range(len(expected_cols))]
+    )
+
+    df["Abs_Contribution"] = df["Contribution"].abs()
+    df = df.sort_values("Abs_Contribution", ascending=False).head(5)
+
+    # Strip pipeline prefixes  (e.g. 'remainder__BILL_AMT1' → 'BILL_AMT1')
+    df["Feature"] = df["Feature"].str.split("__").str[-1]
+    df["Feature"] = df["Feature"].map(lambda x: _FEATURE_LABELS.get(x, x))
+
+    return df.sort_values("Contribution", ascending=True)
+
+
+# ---------------------------------------------------------------------------
+# Global feature importance
+# ---------------------------------------------------------------------------
 
 def get_global_feature_importance(rf_model):
-    """Extracts the built-in global feature importance from the Random Forest."""
-    estimator = rf_model.steps[-1][1] if hasattr(rf_model, 'steps') else rf_model
+    """
+    Returns a DataFrame of the top-10 features by built-in RF importance,
+    sorted ascending (for horizontal bar charts).
+    """
+    estimator = rf_model.steps[-1][1] if hasattr(rf_model, "steps") else rf_model
     importances = estimator.feature_importances_
-    
-    if hasattr(estimator, 'feature_names_in_'):
+
+    if hasattr(estimator, "feature_names_in_"):
         expected_cols = estimator.feature_names_in_
     else:
         expected_cols = [f"Feature {i}" for i in range(len(importances))]
-        
-    df = pd.DataFrame({'Feature': expected_cols, 'Importance': importances})
-    
-    df['Feature'] = df['Feature'].str.split('__').str[-1]
-    
-    feature_dictionary = {
-        'LIMIT_BAL': 'Total Credit Limit', 'SEX': 'Gender', 'EDUCATION': 'Education Level',
-        'MARRIAGE': 'Marital Status', 'AGE': 'Applicant Age', 'PAY_0': 'Current Payment Status',
-        'PAY_2': 'Payment Status (2 Mo Ago)', 'PAY_3': 'Payment Status (3 Mo Ago)',
-        'PAY_4': 'Payment Status (4 Mo Ago)', 'PAY_5': 'Payment Status (5 Mo Ago)',
-        'PAY_6': 'Payment Status (6 Mo Ago)', 'BILL_AMT1': 'Current Billed Amount',
-        'BILL_AMT2': 'Billed Amount (2 Mo Ago)', 'BILL_AMT3': 'Billed Amount (3 Mo Ago)',
-        'BILL_AMT4': 'Billed Amount (4 Mo Ago)', 'BILL_AMT5': 'Billed Amount (5 Mo Ago)',
-        'BILL_AMT6': 'Billed Amount (6 Mo Ago)', 'PAY_AMT1': 'Current Paid Amount',
-        'PAY_AMT2': 'Paid Amount (2 Mo Ago)', 'PAY_AMT3': 'Paid Amount (3 Mo Ago)',
-        'PAY_AMT4': 'Paid Amount (4 Mo Ago)', 'PAY_AMT5': 'Paid Amount (5 Mo Ago)',
-        'PAY_AMT6': 'Paid Amount (6 Mo Ago)'
+
+    df = pd.DataFrame({"Feature": expected_cols, "Importance": importances})
+    df["Feature"] = df["Feature"].str.split("__").str[-1]
+    df["Feature"] = df["Feature"].map(lambda x: _FEATURE_LABELS.get(x, x))
+
+    return df.sort_values("Importance", ascending=True).tail(10)
+
+
+# ---------------------------------------------------------------------------
+# Model introspection helpers
+# ---------------------------------------------------------------------------
+
+def get_model_params(rf_model):
+    """Returns a dict of core hyperparameters for the RF estimator."""
+    estimator = rf_model.steps[-1][1] if hasattr(rf_model, "steps") else rf_model
+    params = estimator.get_params()
+
+    return {
+        "Number of Estimators (Trees)": params.get("n_estimators", "N/A"),
+        "Max Depth": params.get("max_depth", "None (Unlimited)"),
+        "Min Samples Split": params.get("min_samples_split", "N/A"),
+        "Criterion": str(params.get("criterion", "N/A")).capitalize(),
     }
-    
-    df['Feature'] = df['Feature'].map(lambda x: feature_dictionary.get(x, x))
-    return df.sort_values(by='Importance', ascending=True).tail(10)
+
 
 def get_model_metrics():
     """
-    Returns static evaluation metrics from the model's testing phase.
-    UPDATE THESE VALUES to match the exact output of your final Jupyter Notebook.
+    Returns static KPIs and a confusion matrix from the model's test phase.
+    Update these values to match your final Jupyter Notebook output.
+
+    Returns
+    -------
+    kpis : dict
+    cm   : list[list[int]]  – [[TN, FP], [FN, TP]]
     """
     kpis = {
         "Accuracy": "82.4%",
         "Precision": "76.1%",
         "Recall": "68.3%",
-        "F1-Score": "72.0%"
+        "F1-Score": "72.0%",
     }
-    
+
     cm = [
-        [4200, 350],  # Actual Paid (0)
-        [600, 850]    # Actual Default (1)
+        [4200, 350],   # Actual Paid (0)    → [TN, FP]
+        [600, 850],    # Actual Default (1) → [FN, TP]
     ]
-    
+
     return kpis, cm
+
+
+# ---------------------------------------------------------------------------
+# EDA / association-rule data
+# ---------------------------------------------------------------------------
 
 def get_historical_eda_data():
     """
-    Supplies aggregated macro-level data from the training dataset for EDA charts.
+    Supplies aggregated macro-level statistics from the training dataset for
+    the EDA charts on the diagnostics page.
+
+    Returns
+    -------
+    education_data : pd.DataFrame  – default rate by education level
+    limit_data     : dict          – credit-limit distribution by outcome
     """
-    # 1. Default Rate by Education Level
     education_data = pd.DataFrame({
-        'Education': ['Graduate School', 'University', 'High School', 'Others'],
-        'Default_Rate': [19.2, 23.7, 25.1, 7.0] # Standard Taiwan dataset metrics
+        "Education": ["Graduate School", "University", "High School", "Others"],
+        "Default_Rate": [19.2, 23.7, 25.1, 7.0],
     })
-    
-    # 2. Credit Limit Distribution by Status (Approximated quartiles)
+
     limit_data = {
-        'Paid': [50000, 100000, 150000, 250000, 500000],
-        'Defaulted': [20000, 50000, 90000, 150000, 300000]
+        "Paid":      [50_000, 100_000, 150_000, 250_000, 500_000],
+        "Defaulted": [20_000,  50_000,  90_000, 150_000, 300_000],
     }
-    
+
     return education_data, limit_data
+
 
 def get_association_rules():
     """
-    Returns the top Association Rules mined via Apriori/FP-Growth.
-    UPDATE THESE to match your actual Jupyter Notebook output.
+    Returns the top association rules mined via Apriori/FP-Growth.
+    Update these to match your actual Jupyter Notebook output.
     """
     rules = [
         {
-            "Antecedent (Condition)": "PAY_0 = Delay 2+ Months", 
-            "Consequent (Outcome)": "Risk = Default", 
-            "Support": "11.2%", "Confidence": "69.4%", "Lift": "3.14"
+            "Antecedent (Condition)": "PAY_0 = Delay 2+ Months",
+            "Consequent (Outcome)": "Risk = Default",
+            "Support": "11.2%", "Confidence": "69.4%", "Lift": "3.14",
         },
         {
-            "Antecedent (Condition)": "LIMIT_BAL < $50k AND EDUCATION = High School", 
-            "Consequent (Outcome)": "Risk = Default", 
-            "Support": "8.5%", "Confidence": "45.2%", "Lift": "2.05"
+            "Antecedent (Condition)": "LIMIT_BAL < $50k AND EDUCATION = High School",
+            "Consequent (Outcome)": "Risk = Default",
+            "Support": "8.5%", "Confidence": "45.2%", "Lift": "2.05",
         },
         {
-            "Antecedent (Condition)": "PAY_0 = Paid Duly AND PAY_2 = Paid Duly", 
-            "Consequent (Outcome)": "Risk = Low", 
-            "Support": "28.3%", "Confidence": "88.1%", "Lift": "1.12"
+            "Antecedent (Condition)": "PAY_0 = Paid Duly AND PAY_2 = Paid Duly",
+            "Consequent (Outcome)": "Risk = Low",
+            "Support": "28.3%", "Confidence": "88.1%", "Lift": "1.12",
         },
         {
-            "Antecedent (Condition)": "AGE < 25 AND LIMIT_BAL < $30k", 
-            "Consequent (Outcome)": "Risk = Default", 
-            "Support": "6.1%", "Confidence": "39.8%", "Lift": "1.80"
-        }
+            "Antecedent (Condition)": "AGE < 25 AND LIMIT_BAL < $30k",
+            "Consequent (Outcome)": "Risk = Default",
+            "Support": "6.1%", "Confidence": "39.8%", "Lift": "1.80",
+        },
     ]
     return pd.DataFrame(rules)
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def get_payment_trend(app_row):
+    """
+    Transforms a raw applicant row into a 6-month time-series DataFrame
+    suitable for the payment-history line chart.
+    """
+    months = ["5 Mo Ago", "4 Mo Ago", "3 Mo Ago", "2 Mo Ago", "1 Mo Ago", "Current"]
+    bills = [pd.to_numeric(app_row.get(f"BILL_AMT{i}", 0), errors="coerce") for i in range(6, 0, -1)]
+    pays  = [pd.to_numeric(app_row.get(f"PAY_AMT{i}",  0), errors="coerce") for i in range(6, 0, -1)]
+    return pd.DataFrame({"Month": months, "Billed Amount": bills, "Paid Amount": pays})
+
+
+# Human-readable labels shared by local and global importance functions
+_FEATURE_LABELS = {
+    "LIMIT_BAL": "Total Credit Limit",
+    "SEX": "Gender",
+    "EDUCATION": "Education Level",
+    "MARRIAGE": "Marital Status",
+    "AGE": "Applicant Age",
+    "PAY_0": "Current Payment Status",
+    "PAY_2": "Payment Status (2 Mo Ago)",
+    "PAY_3": "Payment Status (3 Mo Ago)",
+    "PAY_4": "Payment Status (4 Mo Ago)",
+    "PAY_5": "Payment Status (5 Mo Ago)",
+    "PAY_6": "Payment Status (6 Mo Ago)",
+    "BILL_AMT1": "Current Billed Amount",
+    "BILL_AMT2": "Billed Amount (2 Mo Ago)",
+    "BILL_AMT3": "Billed Amount (3 Mo Ago)",
+    "BILL_AMT4": "Billed Amount (4 Mo Ago)",
+    "BILL_AMT5": "Billed Amount (5 Mo Ago)",
+    "BILL_AMT6": "Billed Amount (6 Mo Ago)",
+    "PAY_AMT1": "Current Paid Amount",
+    "PAY_AMT2": "Paid Amount (2 Mo Ago)",
+    "PAY_AMT3": "Paid Amount (3 Mo Ago)",
+    "PAY_AMT4": "Paid Amount (4 Mo Ago)",
+    "PAY_AMT5": "Paid Amount (5 Mo Ago)",
+    "PAY_AMT6": "Paid Amount (6 Mo Ago)",
+}
