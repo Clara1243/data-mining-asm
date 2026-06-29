@@ -44,10 +44,9 @@ def map_sex(val):
 
 def map_education(val):
     mapping = {
-        1: "Graduate School", 2: "University", 3: "High School",
-        4: "Others", 5: "Unknown", 6: "Unknown"
+        1: "Graduate School", 2: "University", 3: "High School"
     }
-    return mapping.get(val, "Unknown")
+    return mapping.get(val, "Others")
 
 def clean_dataset_headers(df):
     """Smart detection and cleaning of staggered or duplicate CSV headers."""
@@ -116,6 +115,34 @@ def get_history_badge(val):
         return "badge-red", f"{val} Month(s) Late"
     except (ValueError, TypeError):
         return "badge-gray", "Unknown"
+    
+
+def submit_decision(app_id, decision, dynamic_id_name, current_prob, current_risk, raw_data, notes):
+    # Recalculate top factors silently for the audit log
+    factors = utils.get_risk_factors(raw_data, rf_model, yj_transformer)
+    top_factors = factors.tail(3)['Feature'].tolist() 
+    
+    # Freeze the 6-month historical snapshot
+    history_cols = ['PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6']
+    frozen_history = {col: int(raw_data.get(col, 0)) for col in history_cols if col in raw_data}
+
+    # Build the immutable audit payload
+    audit_record = {
+        "Decision": decision,
+        "Score": round(current_prob, 1),
+        "Risk_Tier": current_risk,
+        "Top_Drivers": top_factors,
+        "PiT_History": frozen_history,
+        "Justification": notes if notes else "No manual justification provided."
+    }
+
+    # Mutate state safely
+    updated_states = st.session_state['applicant_states'].copy()
+    updated_states[app_id] = audit_record
+    st.session_state['applicant_states'] = updated_states
+    
+    icon = "✅" if decision == "Approved" else "🚫"
+    st.toast(f"Audit Log Saved: {dynamic_id_name} '{app_id}' {decision}", icon=icon)
 
 
 # --- Sidebar Navigation ---
@@ -321,8 +348,9 @@ if page == "Applicant Assessment":
         
         selected_option = st.selectbox("Applicant ID", options=applicant_list, label_visibility="collapsed")
         st.markdown("<br>", unsafe_allow_html=True)
-
-        selected_id = selected_option.split(" ")[0]
+        
+        selected_id = selected_option.replace(" (Pending)", "") 
+        
         df = st.session_state['dataset']
         id_col = st.session_state['id_column']
 
@@ -492,40 +520,29 @@ if page == "Applicant Assessment":
             st.markdown("<br>", unsafe_allow_html=True)
 
             with st.container(border=True):
-                text_col, action_col = st.columns([1.5, 1], vertical_alignment="center")
-
-                with text_col:
-                    st.markdown("<h3 class='decision-title'>Final Decision</h3>", unsafe_allow_html=True)
-
-                def submit_decision(app_id, decision):
-                    # 1. Force state mutation recognition by reassigning the whole dictionary
-                    updated_states = st.session_state['applicant_states'].copy()
-                    updated_states[app_id] = decision
-                    st.session_state['applicant_states'] = updated_states
-                    
-                    # 2. Provide immediate visual confirmation
-                    icon = "✅" if decision == "Approved" else "🚫"
-                    st.toast(f"Decision saved: Applicant {app_id} {decision}!", icon=icon)
-
+                st.markdown("<h3 class='decision-title'>Decision Workflow</h3>", unsafe_allow_html=True)
+                
+                # Use a clean 3-part vertical flow
+                st.caption("1. Review Algorithm Risk Assessment above.")
+                
+                # 2. Collapsible Justification - Only expand if needed (Reduces clutter)
+                with st.expander("Decision Justification & Overrides", expanded=False):
+                    justification_note = st.text_area(
+                        "Enter rationale for approval/rejection", 
+                        placeholder="Required for manual overrides or exception handling...",
+                        key=f"just_{selected_id}"
+                    )
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                # 3. Action Row (Buttons pushed to bottom for clear separation)
                 action_col1, action_col2 = st.columns(2)
-
                 with action_col1:
-                    st.markdown("<div class='reject-marker'></div>", unsafe_allow_html=True)
-                    st.button(
-                        "Reject Application", 
-                        use_container_width=True,
-                        on_click=submit_decision,
-                        args=(selected_id, "Rejected") 
-                    )
-
+                    st.button("Reject Application", use_container_width=True, 
+                            on_click=submit_decision, args=(selected_id, "Rejected", id_col, default_prob, risk_tag, app_data, justification_note))
                 with action_col2:
-                    st.markdown("<div class='approve-marker'></div>", unsafe_allow_html=True)
-                    st.button(
-                        "Approve Application", 
-                        use_container_width=True,
-                        on_click=submit_decision,
-                        args=(selected_id, "Approved")
-                    )
+                    st.button("Approve Application", use_container_width=True, 
+                            on_click=submit_decision, args=(selected_id, "Approved", id_col, default_prob, risk_tag, app_data, justification_note))
 
         # ==========================================
         # DEEP DIVE ANALYSIS CHARTS
@@ -609,86 +626,87 @@ if page == "Applicant Assessment":
 elif page == "Applicant Archive":
     st.title("Applicant Archive")
     st.markdown(
-        "<p class='subtext'>Historical ledger of all processed applicant decisions.</p>", 
+        "<p class='subtext'>Immutable Point-in-Time (PiT) audit ledger of processed applications.</p>", 
         unsafe_allow_html=True
     )
     st.markdown("<hr/>", unsafe_allow_html=True)
 
-    if st.session_state['dataset'] is not None:
-        # 1. Identify applicants who are Approved or Rejected
-        processed_ids = [
-            app_id for app_id, status in st.session_state['applicant_states'].items() 
-            if status != "Pending"
-        ]
+    if st.session_state.get('dataset') is not None:
+        # Filter for processed applicants (State is now a dict, not just a string)
+        processed_data = {
+            k: v for k, v in st.session_state['applicant_states'].items() 
+            if isinstance(v, dict)
+        }
         
-        if processed_ids:
-            # 2. Extract their data from the main dataset
+        if processed_data:
             df = st.session_state['dataset']
             id_col = st.session_state['id_column']
-            # Cast both sides to string to guarantee matches regardless of data type
-            str_processed_ids = [str(pid) for pid in processed_ids]
             
-            archive_df = df[df[id_col].astype(str).isin(str_processed_ids)].copy()
-            archive_df['Final Decision'] = archive_df[id_col].astype(str).map(st.session_state['applicant_states'])
-            
-            # 4. Clean up the dataframe for the UI
-            display_cols = ['ID', 'AGE', 'SEX', 'EDUCATION', 'LIMIT_BAL', 'Final Decision']
-            display_df = archive_df[display_cols].copy()
-            
-            display_df['SEX'] = display_df['SEX'].apply(map_sex)
-            display_df['EDUCATION'] = display_df['EDUCATION'].apply(map_education)
-            
-            # 5. Render the sleek data table
-            if 'archive_page' not in st.session_state:
-                st.session_state['archive_page'] = 1
-
-            rows_per_page = 10
-            total_rows = len(display_df)
-            total_pages = max(1, (total_rows - 1) // rows_per_page + 1)
-
-            # Ensure current page doesn't exceed total pages (if filtering changes)
-            if st.session_state['archive_page'] > total_pages:
-                st.session_state['archive_page'] = total_pages
-
-            # 2. Slice the dataframe for the current page
-            start_idx = (st.session_state['archive_page'] - 1) * rows_per_page
-            end_idx = start_idx + rows_per_page
-            paginated_df = display_df.iloc[start_idx:end_idx]
-
-            # 3. Render the table with the sliced data
+            # --- 1. BUILD SUMMARY TABLE ---
+            summary_rows = []
+            for app_id, audit in processed_data.items():
+                # Detect Maker-Checker Overrides
+                is_override = False
+                if audit['Decision'] == "Approved" and audit['Risk_Tier'] == "HIGH RISK":
+                    is_override = True
+                elif audit['Decision'] == "Rejected" and audit['Risk_Tier'] == "LOW RISK":
+                    is_override = True
+                    
+                # Fetch raw demographic snapshot
+                raw_row = df[df[id_col].astype(str) == str(app_id)].iloc[0]
+                
+                summary_rows.append({
+                    "Applicant ID": str(app_id),
+                    "Age": raw_row.get('AGE', 'N/A'),
+                    "Credit Limit": raw_row.get('LIMIT_BAL', 0),
+                    "Model Score": f"{audit['Score']}% ({audit['Risk_Tier']})",
+                    "Final Decision": audit['Decision'],
+                    "Delta Flag": "⚠️ OVERRIDE" if is_override else "✅ Aligned"
+                })
+                
+            summary_df = pd.DataFrame(summary_rows)
             st.dataframe(
-                paginated_df,
-                use_container_width=True,
+                summary_df, 
+                use_container_width=True, 
                 hide_index=True,
-                column_config={
-                    "ID": st.column_config.TextColumn("Applicant ID"),
-                    "AGE": st.column_config.NumberColumn("Age"),
-                    "SEX": st.column_config.TextColumn("Gender"),
-                    "EDUCATION": st.column_config.TextColumn("Education"),
-                    "LIMIT_BAL": st.column_config.NumberColumn("Credit Limit", format="$%d"),
-                    "Final Decision": st.column_config.TextColumn("Decision Status")
-                }
+                column_config={"Credit Limit": st.column_config.NumberColumn(format="$%d")}
             )
-
-            # 4. Render Pagination Controls Below the Table
-            st.markdown("<div class='spacer-md'></div>", unsafe_allow_html=True)
-            prev_col, text_col, next_col = st.columns([1, 2, 1], vertical_alignment="center")
             
-            with prev_col:
-                if st.button("< Previous", disabled=(st.session_state['archive_page'] == 1), use_container_width=True):
-                    st.session_state['archive_page'] -= 1
-                    st.rerun()
-            with text_col:
-                st.markdown(
-                    f"<div style='text-align: center; font-size: 0.9rem; opacity: 0.8;'>"
-                    f"Page <b>{st.session_state['archive_page']}</b> of <b>{total_pages}</b>"
-                    f"</div>", 
-                    unsafe_allow_html=True
-                )
-            with next_col:
-                if st.button("Next >", disabled=(st.session_state['archive_page'] == total_pages), use_container_width=True):
-                    st.session_state['archive_page'] += 1
-                    st.rerun()
+            st.markdown("<br><h4>Detailed Audit Logs</h4>", unsafe_allow_html=True)
+            
+            # --- 2. BUILD DETAILED EXPANDERS (THE LEDGER) ---
+            for app_id, audit in processed_data.items():
+                
+                # Visual logic for the expander header
+                header_icon = "⚠️" if ("OVERRIDE" in summary_df[summary_df["Applicant ID"] == app_id]["Delta Flag"].values[0]) else "📄"
+                header_title = f"{header_icon} {app_id} | {audit['Decision']} | Machine Score: {audit['Score']}%"
+                
+                with st.expander(header_title):
+                    d_col1, d_col2 = st.columns(2)
+                    
+                    with d_col1:
+                        st.markdown("**🧠 Explainable AI (XAI) Drivers**")
+                        st.caption("Top factors driving this specific risk score:")
+                        for driver in audit['Top_Drivers']:
+                            st.markdown(f"- {driver}")
+                            
+                        st.markdown("<br>**🧑‍💻 Operator Justification**", unsafe_allow_html=True)
+                        st.info(audit['Justification'])
+                        
+                    with d_col2:
+                        st.markdown("**🕒 Point-in-Time History**")
+                        st.caption("Frozen payment status at time of review:")
+                        pit_history = audit['PiT_History']
+                        
+                        # Render a mini-grid for the frozen history
+                        st.code(
+                            f"Current : {pit_history.get('PAY_0', 'N/A')}\n"
+                            f"Month -2: {pit_history.get('PAY_2', 'N/A')}\n"
+                            f"Month -3: {pit_history.get('PAY_3', 'N/A')}\n"
+                            f"Month -4: {pit_history.get('PAY_4', 'N/A')}\n"
+                            f"Month -5: {pit_history.get('PAY_5', 'N/A')}\n"
+                            f"Month -6: {pit_history.get('PAY_6', 'N/A')}"
+                        )
         else:
             st.info("No applicants have been processed yet. Decisions made in the Assessment tab will appear here.")
     else:
