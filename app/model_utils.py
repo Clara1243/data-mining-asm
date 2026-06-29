@@ -44,33 +44,71 @@ def map_columns(df):
     }
     return df.rename(columns=mapping)
 
-def validate_dataset_schema(df):
-    """Checks if the uploaded dataset contains the critical minimum features."""
-    required_features = [
-        'LIMIT_BAL', 'SEX', 'EDUCATION', 'MARRIAGE', 'AGE', 
-        'PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6'
-    ]
+def repair_dataset_schema(df):
+    """
+    Industrial approach: Instead of rejecting the file, we dynamically 
+    inject missing columns with conservative statistical baselines.
+    """
     
-    df_columns = df.columns.tolist()
-    missing_features = [feature for feature in required_features if feature not in df_columns]
+    safe_defaults = {
+        'LIMIT_BAL': 50000,  # Conservative baseline limit
+        'SEX': 2,            # 2 = Female (or mode of your dataset)
+        'EDUCATION': 4,      # 4 = Others/Unknown
+        'MARRIAGE': 3,       # 3 = Others/Unknown
+        'AGE': 35,           # Median age
+        
+        # Default Payment Status (0 = Revolving / Average behavior)
+        'PAY_0': 0, 'PAY_2': 0, 'PAY_3': 0, 'PAY_4': 0, 'PAY_5': 0, 'PAY_6': 0, 
+        
+        # Default Billing Amounts (Assume $0 if not provided)
+        'BILL_AMT1': 0, 'BILL_AMT2': 0, 'BILL_AMT3': 0, 
+        'BILL_AMT4': 0, 'BILL_AMT5': 0, 'BILL_AMT6': 0,
+        
+        # Default Payment Amounts (Assume $0 if not provided)
+        'PAY_AMT1': 0, 'PAY_AMT2': 0, 'PAY_AMT3': 0, 
+        'PAY_AMT4': 0, 'PAY_AMT5': 0, 'PAY_AMT6': 0
+    }
     
-    if missing_features:
-        return False, missing_features
-    return True, []
+    missing_detected = []
+    
+    # Check for missing columns and inject the default values
+    for col, default_val in safe_defaults.items():
+        if col not in df.columns:
+            df[col] = default_val
+            missing_detected.append(col)
+            
+    return df, missing_detected
 
 def prepare_features(app_row, rf_model):
-    """Cleans data and automatically aligns it to the pipeline's exact expected features."""
     drop_cols = ['ID', 'UNNAMED: 0', 'DEFAULT PAYMENT NEXT MONTH', 'Y']
     features_raw = app_row.drop(labels=drop_cols, errors='ignore')
     
-    # Convert all to numeric
-    features_numeric = pd.to_numeric(features_raw, errors='coerce').fillna(0)
+    features_numeric = pd.to_numeric(features_raw, errors='coerce')
     features_df = pd.DataFrame([features_numeric])
+
+    if str(app_row.get('IS_NEW_APPLICANT', 'False')).strip().lower() in ['true', '1', '1.0', 'yes', 't']:
+        features_df['PAY_0'] = features_df['PAY_2'] = features_df['PAY_3'] = -2
+        features_df['PAY_4'] = features_df['PAY_5'] = features_df['PAY_6'] = -2
+        for i in range(1, 7):
+            features_df[f'BILL_AMT{i}'] = 0
+            features_df[f'PAY_AMT{i}'] = 0
     
-    # Ultimate source of truth: Align perfectly with what the pipeline expects
+    if 'AGE' in features_df.columns:
+        features_df['AGE'] = features_df['AGE'].fillna(35) # Median age
+    if 'LIMIT_BAL' in features_df.columns:
+        features_df['LIMIT_BAL'] = features_df['LIMIT_BAL'].fillna(100000)
+        
+    # Categorical variables: Fill missing with 'Unknown' or mode
+    if 'EDUCATION' in features_df.columns:
+        features_df['EDUCATION'] = features_df['EDUCATION'].fillna(4) # 4 = Others
+    if 'MARRIAGE' in features_df.columns:
+        features_df['MARRIAGE'] = features_df['MARRIAGE'].fillna(3) # 3 = Others
+        
+    # Financial history: Fill missing with 0 (assuming no activity if left blank)
+    features_df = features_df.fillna(0) 
+    
     if hasattr(rf_model, 'feature_names_in_'):
         expected_cols = rf_model.feature_names_in_
-        # Reindex automatically drops extra columns and fills missing ones with 0
         features_aligned = features_df.reindex(columns=expected_cols, fill_value=0)
     else:
         features_aligned = features_df

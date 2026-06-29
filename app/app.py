@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import model_utils as utils
 from streamlit_option_menu import option_menu
@@ -106,8 +107,10 @@ def map_marriage(val):
 def get_history_badge(val):
     try:
         val = int(val)
-        if val <= -1:
-            return "badge-gray", f"Paid ({val})"
+        if val == -2:
+            return "badge-gray", "No Consumption (-2)"
+        if val == -1:
+            return "badge-navy", "Paid in Full (-1)"
         if val == 0:
             return "badge-navy", "Revolving (0)"
         return "badge-red", f"{val} Month(s) Late"
@@ -187,12 +190,12 @@ if page == "Applicant Assessment":
             
             # Define the exact schema your pipeline expects
             template_cols = [
-                'ID', 'LIMIT_BAL', 'SEX', 'EDUCATION', 'MARRIAGE', 'AGE', 
+                'ID', 'IS_NEW_APPLICANT', 'LIMIT_BAL', 'SEX', 'EDUCATION', 'MARRIAGE', 'AGE', 
                 'PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6', 
                 'BILL_AMT1', 'BILL_AMT2', 'BILL_AMT3', 'BILL_AMT4', 'BILL_AMT5', 'BILL_AMT6', 
                 'PAY_AMT1', 'PAY_AMT2', 'PAY_AMT3', 'PAY_AMT4', 'PAY_AMT5', 'PAY_AMT6'
             ]
-            
+                        
             # Create an empty dataframe with these headers and convert to CSV
             template_df = pd.DataFrame(columns=template_cols)
             csv_template = template_df.to_csv(index=False).encode('utf-8')
@@ -240,19 +243,34 @@ if page == "Applicant Assessment":
                             df.columns = df.columns.str.upper()
 
                             # 3. Validate dataset schema for required features
-                            is_valid, missing_cols = utils.validate_dataset_schema(df)
+                            is_valid, missing_cols = utils.repair_dataset_schema(df)
 
-                            if not is_valid:
-                                st.error(f"Upload rejected. The dataset is missing required credit features: {', '.join(missing_cols)}")
-                                st.stop() 
-
-                            # 4. Dynamic Primary Key (ID) Detection
-                            id_col = detect_id_column(df)
+                            if missing_cols:
+                                st.warning(f"⚠️ **Partial Data Detected:** The uploaded file was missing the following columns: `{', '.join(missing_cols)}`. The system has automatically applied conservative baseline values to proceed.")
                             
+                            id_col = detect_id_column(df)
+
                             if id_col is None:
                                 df.insert(0, 'Generated_ID', [f"APP-{i:04d}" for i in range(1, len(df) + 1)])
                                 id_col = 'Generated_ID'
                                 st.toast("No unique ID column found. Auto-generated temporary IDs.")
+
+                            # 4. Handle New Applicant Auto-Detection
+                            if 'IS_NEW_APPLICANT' not in df.columns:
+                                pay_cols = ['PAY_0', 'PAY_2', 'PAY_3', 'PAY_4', 'PAY_5', 'PAY_6']
+                                bill_cols = [f'BILL_AMT{i}' for i in range(1, 7)]
+                                pay_amt_cols = [f'PAY_AMT{i}' for i in range(1, 7)]
+                                
+                                # Force convert to numeric safely so "-2" text becomes -2 integer
+                                temp_pay = df[pay_cols].apply(pd.to_numeric, errors='coerce')
+                                temp_fin = df[bill_cols + pay_amt_cols].apply(pd.to_numeric, errors='coerce')
+                                
+                                # Check for -2 (No consumption) OR 0 (injected by the repair function)
+                                is_status_empty = temp_pay.isin([-2, 0, np.nan]).all(axis=1)
+                                is_financials_empty = temp_fin.isin([0, np.nan]).all(axis=1)
+                                
+                                df['IS_NEW_APPLICANT'] = is_status_empty & is_financials_empty
+                                st.toast("Auto-detected new applicants based on empty 6-month histories.")
                                 
                             # 5. Commit to Session State
                             st.session_state['id_column'] = id_col
@@ -299,7 +317,6 @@ if page == "Applicant Assessment":
         st.success("🎉 All applicants in the current batch have been processed! Check the Archive tab for the ledger.")
         
     elif pending_applicants:
-        # We removed the "Select an applicant..." placeholder
         applicant_list = [f"{app_id} (Pending)" for app_id in pending_applicants]
         
         selected_option = st.selectbox("Applicant ID", options=applicant_list, label_visibility="collapsed")
@@ -308,12 +325,26 @@ if page == "Applicant Assessment":
         selected_id = selected_option.split(" ")[0]
         df = st.session_state['dataset']
         id_col = st.session_state['id_column']
-        app_data = df[df[id_col].astype(str) == str(selected_id)].iloc[0]
+
+        filtered_df = df[df[id_col].astype(str) == str(selected_id)]
+
+        if filtered_df.empty:
+            st.warning(f"Data sync delay for ID: {selected_id}. Refreshing queue...")
+            st.rerun() # Force a clean rerun to repair the UI state
+        else:
+            app_data = filtered_df.iloc[0]
 
         left_col, right_col = st.columns([1, 1], gap="large")
 
         with left_col:
             st.subheader("Applicant Profile Details")
+            raw_new_val = app_data.get('IS_NEW_APPLICANT', 'False')
+            
+            # ADDED '1.0' to catch decimal floats from Excel/Pandas
+            is_new = str(raw_new_val).strip().lower() in ['true', '1', '1.0', 'yes', 't']
+            
+            if is_new:
+                st.warning("⚠️ **Thin File Detected:** This applicant has no prior credit history. The risk score is based purely on demographics and initial credit limit.")
 
             with st.container(border=True):
                 st.markdown("<p class='section-title'>Demographics</p>", unsafe_allow_html=True)
