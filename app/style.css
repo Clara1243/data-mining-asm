@@ -426,7 +426,7 @@ div.element-container:has(.approve-marker) + div.element-container button:hover 
     border: 1px solid;
 }
 
-/* XAI driver pills */
+/* Analyze driver pills */
 .audit-drivers-wrap {
     display: flex;
     flex-wrap: wrap;

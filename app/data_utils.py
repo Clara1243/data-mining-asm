@@ -47,11 +47,11 @@ def map_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 #: Conservative statistical baselines injected when a required column is absent.
 _SAFE_DEFAULTS = {
-    "LIMIT_BAL": 50_000,
-    "SEX": 2,          # 2 = Female (or mode of dataset)
-    "EDUCATION": 4,    # 4 = Others/Unknown
-    "MARRIAGE": 3,     # 3 = Others/Unknown
-    "AGE": 35,         # Median age
+    "LIMIT_BAL": "Not Applicable",
+    "SEX": "Not Provided",          # 2 = Female (or mode of dataset)
+    "EDUCATION": "Not Provided",    # 4 = Others/Unknown
+    "MARRIAGE": "Not Provided",     # 3 = Others/Unknown
+    "AGE": "Not Provided",         # Median age
     **{col: 0 for col in PAY_COLS},
     **{col: 0 for col in BILL_COLS},
     **{col: 0 for col in PAY_AMT_COLS},
