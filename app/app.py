@@ -320,7 +320,6 @@ if page == "Applicant Assessment":
         st.session_state.get("dataset") is not None
         and st.session_state.get("applicant_states")
     ):
-        st.markdown("<br>", unsafe_allow_html=True)
         total_apps = len(st.session_state["dataset"])
         processed_apps = sum(
             1 for state in st.session_state["applicant_states"].values()
@@ -330,10 +329,9 @@ if page == "Applicant Assessment":
         progress_pct = round(progress_fraction * 100, 2)
 
         st.progress(progress_fraction, text=f"Batch Progress: {processed_apps} / {total_apps} Processed ({progress_pct:.2f}%)")
-        st.markdown("<br>", unsafe_allow_html=True)
 
     # --- 3. Applicant queue ---
-    st.markdown("##### Select Applicant from Queue:")
+    st.subheader("Select Applicant from Queue")
 
     pending_applicants = []
     if st.session_state["dataset"] is not None:
@@ -354,7 +352,6 @@ if page == "Applicant Assessment":
         selected_option = st.selectbox(
             "Applicant ID", options=applicant_list, label_visibility="collapsed"
         )
-        st.markdown("<br>", unsafe_allow_html=True)
 
         selected_id = selected_option.replace(" (Pending)", "")
 
@@ -369,12 +366,19 @@ if page == "Applicant Assessment":
             app_data = filtered_df.iloc[0]
         
         is_new = is_new_applicant_flag(app_data.get("IS_NEW_APPLICANT", "False"))
+        raw_limit = pd.to_numeric(app_data.get("LIMIT_BAL", np.nan), errors="coerce")
+        limit_bal_missing = pd.isna(raw_limit) or str(app_data.get("LIMIT_BAL", "")).strip().lower() in {"", "na", "nan", "none", "not applicable", "not provided"}
 
         if is_new:
             st.warning(
                 "⚠️ **Thin File Detected:** This applicant has no prior credit "
                 "history. The risk score is based purely on demographics and "
                 "initial credit limit."
+            )
+        elif limit_bal_missing:
+            st.warning(
+                "⚠️ **Credit limit missing:** Automated scoring is withheld for this applicant. "
+                "Manual review is recommended until the limit is obtained."
             )
 
         left_col, right_col = st.columns([1, 1], gap="large")
@@ -407,10 +411,12 @@ if page == "Applicant Assessment":
                     st.divider()
 
                     st.markdown("<p class='section-title-sm'>Financial Information</p>", unsafe_allow_html=True)
-                    raw_limit = pd.to_numeric(app_data.get("LIMIT_BAL", 0), errors="coerce") or 0
+                    raw_limit = pd.to_numeric(app_data.get("LIMIT_BAL", np.nan), errors="coerce")
+                    limit_bal_missing = pd.isna(raw_limit) or str(app_data.get("LIMIT_BAL", "")).strip().lower() in {"", "na", "nan", "none", "not applicable", "not provided"}
+                    display_limit = "Unavailable" if limit_bal_missing else f"$ {raw_limit:,.0f}"
                     st.markdown(
                         f"<div class='profile-item'><span class='profile-label'>Credit Limit Balance<br></span>"
-                        f"<span class='profile-value-lg'>$ {raw_limit:,.0f}</span></div>",
+                        f"<span class='profile-value-lg'>{display_limit}</span></div>",
                         unsafe_allow_html=True,
                     )
 
@@ -442,7 +448,7 @@ if page == "Applicant Assessment":
                     ))
                     fig_trend.update_layout(
                         **BASE_LAYOUT,
-                        height=260,
+                        height=190,
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                         yaxis=dict(gridcolor="rgba(128, 128, 128, 0.2)", tickprefix="$"),
                         xaxis=dict(showgrid=False),
@@ -472,7 +478,7 @@ if page == "Applicant Assessment":
                         ))
                         fig_factors.update_layout(
                             **BASE_LAYOUT,
-                            height=240,
+                            height=180,
                             xaxis=dict(showgrid=True, gridcolor="rgba(128, 128, 128, 0.2)", zeroline=True, zerolinecolor="rgba(128, 128, 128, 0.5)"),
                             yaxis=dict(showgrid=False),
                         )
@@ -483,31 +489,43 @@ if page == "Applicant Assessment":
             st.subheader("Model Assessment")
 
             with st.container(border=True):
-                try:
-                    default_prob = mu.process_and_predict(app_data, rf_model, yj_transformer)
-                except Exception as exc:
-                    default_prob = None
-                    st.warning(f"Prediction could not be generated for this applicant: {exc}")
-
-                risk_tag, risk_color = classify_risk(
-                    default_prob,
-                    st.session_state["low_risk_threshold"],
-                    st.session_state["high_risk_threshold"],
-                )
-
-                if default_prob is None:
-                    st.info("Model score unavailable; manual review required.")
-                else:
-                    fig = go.Figure(data=[go.Pie(
-                        values=[default_prob, 100 - default_prob], hole=0.75,
-                        marker_colors=[risk_color, "rgba(128, 128, 128, 0.2)"],
-                        textinfo="none", hoverinfo="none", direction="clockwise", sort=False,
-                    )])
-                    fig.update_layout(
-                        showlegend=False, height=130, margin=dict(t=0, b=0, l=0, r=0),
-                        annotations=[dict(text=f"{default_prob:.1f}%", x=0.5, y=0.5, font_size=28, showarrow=False)],
+                if is_new or limit_bal_missing:
+                    st.markdown(
+                        "<div style='text-align: center; padding: 20px;'>"
+                        "<h3 style='color: #f59e0b; font-weight: 600;'>Prediction Unavailable</h3>"
+                        "<p style='color: #6b7280; font-size: 0.9rem;'>Insufficient or incomplete profile data for automated risk assessment.</p>"
+                        "</div>",
+                        unsafe_allow_html=True,
                     )
-                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                    default_prob = None
+                    risk_tag = "NOT APPLICABLE"
+                    risk_color = "#f59e0b"
+                else:
+                    try:
+                        default_prob = mu.process_and_predict(app_data, rf_model, yj_transformer)
+                    except Exception as exc:
+                        default_prob = None
+                        st.warning(f"Prediction could not be generated for this applicant: {exc}")
+
+                    risk_tag, risk_color = classify_risk(
+                        default_prob,
+                        st.session_state["low_risk_threshold"],
+                        st.session_state["high_risk_threshold"],
+                    )
+
+                    if default_prob is None:
+                        st.info("Model score unavailable; manual review required.")
+                    else:
+                        fig = go.Figure(data=[go.Pie(
+                            values=[default_prob, 100 - default_prob], hole=0.75,
+                            marker_colors=[risk_color, "rgba(128, 128, 128, 0.2)"],
+                            textinfo="none", hoverinfo="none", direction="clockwise", sort=False,
+                        )])
+                        fig.update_layout(
+                            showlegend=False, height=110, margin=dict(t=0, b=0, l=0, r=0),
+                            annotations=[dict(text=f"{default_prob:.1f}%", x=0.5, y=0.5, font_size=28, showarrow=False)],
+                        )
+                        st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
 
                 st.markdown(
                     f'<div class="risk-tag-container"><span class="risk-tag" style="color:{risk_color}; background-color:{risk_color}20;">{risk_tag}</span></div>',
