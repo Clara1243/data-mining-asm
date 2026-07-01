@@ -12,6 +12,8 @@ All data-wrangling helpers that are NOT model-specific:
 import numpy as np
 import pandas as pd
 
+from constants import PAY_COLS, BILL_COLS, PAY_AMT_COLS
+
 
 # ---------------------------------------------------------------------------
 # Column-name mapping
@@ -50,11 +52,9 @@ _SAFE_DEFAULTS = {
     "EDUCATION": 4,    # 4 = Others/Unknown
     "MARRIAGE": 3,     # 3 = Others/Unknown
     "AGE": 35,         # Median age
-    "PAY_0": 0, "PAY_2": 0, "PAY_3": 0, "PAY_4": 0, "PAY_5": 0, "PAY_6": 0,
-    "BILL_AMT1": 0, "BILL_AMT2": 0, "BILL_AMT3": 0,
-    "BILL_AMT4": 0, "BILL_AMT5": 0, "BILL_AMT6": 0,
-    "PAY_AMT1": 0, "PAY_AMT2": 0, "PAY_AMT3": 0,
-    "PAY_AMT4": 0, "PAY_AMT5": 0, "PAY_AMT6": 0,
+    **{col: 0 for col in PAY_COLS},
+    **{col: 0 for col in BILL_COLS},
+    **{col: 0 for col in PAY_AMT_COLS},
 }
 
 
@@ -173,12 +173,8 @@ def detect_new_applicants(df: pd.DataFrame) -> pd.Series:
     only -2 (No Consumption), 0, or NaN **and** all their financial-history
     columns are 0 or NaN.
     """
-    pay_cols      = ["PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6"]
-    bill_cols     = [f"BILL_AMT{i}" for i in range(1, 7)]
-    pay_amt_cols  = [f"PAY_AMT{i}"  for i in range(1, 7)]
-
-    temp_pay = df[pay_cols].apply(pd.to_numeric, errors="coerce")
-    temp_fin = df[bill_cols + pay_amt_cols].apply(pd.to_numeric, errors="coerce")
+    temp_pay = df[PAY_COLS].apply(pd.to_numeric, errors="coerce")
+    temp_fin = df[BILL_COLS + PAY_AMT_COLS].apply(pd.to_numeric, errors="coerce")
 
     is_status_empty     = temp_pay.isin([-2, 0, np.nan]).all(axis=1)
     is_financials_empty = temp_fin.isin([0, np.nan]).all(axis=1)

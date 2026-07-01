@@ -21,6 +21,8 @@ import pandas as pd
 import shap
 import streamlit as st
 
+from constants import PAY_COLS, BILL_COLS, PAY_AMT_COLS, is_new_applicant_flag
+
 
 # ---------------------------------------------------------------------------
 # Model loading
@@ -88,14 +90,11 @@ def prepare_features(app_row, rf_model):
     features_df = pd.DataFrame([features_numeric])
 
     # Override history columns for brand-new applicants
-    if str(app_row.get("IS_NEW_APPLICANT", "False")).strip().lower() in [
-        "true", "1", "1.0", "yes", "t"
-    ]:
-        for col in ["PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6"]:
+    if is_new_applicant_flag(app_row.get("IS_NEW_APPLICANT", "False")):
+        for col in PAY_COLS:
             features_df[col] = -2
-        for i in range(1, 7):
-            features_df[f"BILL_AMT{i}"] = 0
-            features_df[f"PAY_AMT{i}"] = 0
+        for col in BILL_COLS + PAY_AMT_COLS:
+            features_df[col] = 0
 
     # Conservative fill-ins for common demographic fields
     features_df["AGE"] = features_df.get("AGE", pd.Series([35])).fillna(35)
