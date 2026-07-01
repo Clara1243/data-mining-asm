@@ -83,6 +83,10 @@ if "dataset" not in st.session_state:
     st.session_state["dataset"] = None
 if "applicant_states" not in st.session_state:
     st.session_state["applicant_states"] = {}
+if "low_risk_threshold" not in st.session_state:
+    st.session_state["low_risk_threshold"] = 40
+if "high_risk_threshold" not in st.session_state:
+    st.session_state["high_risk_threshold"] = 70
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +197,7 @@ with st.sidebar:
     )
 
     st.markdown(
-        "<div class='sidebar-footer'>© 2026 Data Mining Project v5.0</div>",
+        "<div class='sidebar-footer'>© 2026 Data Mining Project v6.0</div>",
         unsafe_allow_html=True,
     )
 
@@ -444,65 +448,92 @@ if page == "Applicant Assessment":
             # --- TAB 3: Risk Factors Analysis ---
             with data_tabs[2]:
                 with st.container(border=True):
-                    st.markdown("""
-                        <div class='shap-legend' style='margin-top:0px;'>
-                            <span class='shap-risk'><b>Red bars (+):</b></span> Pushes closer to default.<br>
-                            <span class='shap-safe'><b>Green bars (-):</b></span> Pushes further away from default.
-                        </div>
-                    """, unsafe_allow_html=True)
+                    if is_new:
+                        st.info("⚠️ Risk factor analysis is not applicable for Thin File applicants with no credit history.")
+                    else:
+                        st.markdown("""
+                            <div class='shap-legend' style='margin-top:0px;'>
+                                <span class='shap-risk'><b>Red bars (+):</b></span> Pushes closer to default.<br>
+                                <span class='shap-safe'><b>Green bars (-):</b></span> Pushes further away from default.
+                            </div>
+                        """, unsafe_allow_html=True)
 
-                    factors_df = mu.get_risk_factors(app_data, rf_model, yj_transformer)
-                    colors = ["#ef4444" if v > 0 else "#22c55e" for v in factors_df["Contribution"]]
+                        factors_df = mu.get_risk_factors(app_data, rf_model, yj_transformer)
+                        colors = ["#ef4444" if v > 0 else "#22c55e" for v in factors_df["Contribution"]]
 
-                    fig_factors = go.Figure(go.Bar(
-                        x=factors_df["Contribution"], y=factors_df["Feature"],
-                        orientation="h", marker_color=colors,
-                        text=[f"+{v:.2f}" if v > 0 else f"{v:.2f}" for v in factors_df["Contribution"]], textposition="auto",
-                    ))
-                    fig_factors.update_layout(
-                        **BASE_LAYOUT,
-                        height=240,
-                        xaxis=dict(showgrid=True, gridcolor="rgba(128, 128, 128, 0.2)", zeroline=True, zerolinecolor="rgba(128, 128, 128, 0.5)"),
-                        yaxis=dict(showgrid=False),
-                    )
-                    st.plotly_chart(fig_factors, use_container_width=True, config=PLOTLY_CONFIG)
+                        fig_factors = go.Figure(go.Bar(
+                            x=factors_df["Contribution"], y=factors_df["Feature"],
+                            orientation="h", marker_color=colors,
+                            text=[f"+{v:.2f}" if v > 0 else f"{v:.2f}" for v in factors_df["Contribution"]], textposition="auto",
+                        ))
+                        fig_factors.update_layout(
+                            **BASE_LAYOUT,
+                            height=240,
+                            xaxis=dict(showgrid=True, gridcolor="rgba(128, 128, 128, 0.2)", zeroline=True, zerolinecolor="rgba(128, 128, 128, 0.5)"),
+                            yaxis=dict(showgrid=False),
+                        )
+                        st.plotly_chart(fig_factors, use_container_width=True, config=PLOTLY_CONFIG)
 
         # ---- Right column: Risk Assessment ----
         with right_col:
             st.subheader("Model Assessment")
 
             with st.container(border=True):
-                default_prob = mu.process_and_predict(app_data, rf_model, yj_transformer)
-                risk_tag, risk_color = classify_risk(default_prob)
+                if is_new:
+                    # Thin File: Skip model prediction
+                    st.markdown(
+                        "<div style='text-align: center; padding: 20px;'>"
+                        "<h3 style='color: #f59e0b; font-weight: 600;'>Prediction Not Applicable</h3>"
+                        "<p style='color: #6b7280; font-size: 0.9rem;'>Insufficient credit history available for automated risk assessment.</p>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
+                    default_prob = None
+                    risk_tag = "NOT APPLICABLE"
+                    risk_color = "#f59e0b"  # amber color
+                else:
+                    # Standard prediction
+                    default_prob = mu.process_and_predict(app_data, rf_model, yj_transformer)
+                    risk_tag, risk_color = classify_risk(
+                        default_prob,
+                        st.session_state["low_risk_threshold"],
+                        st.session_state["high_risk_threshold"]
+                    )
 
-                fig = go.Figure(data=[go.Pie(
-                    values=[default_prob, 100 - default_prob], hole=0.75,
-                    marker_colors=[risk_color, "rgba(128, 128, 128, 0.2)"],
-                    textinfo="none", hoverinfo="none", direction="clockwise", sort=False,
-                )])
-                fig.update_layout(
-                    showlegend=False, height=130, margin=dict(t=0, b=0, l=0, r=0),
-                    annotations=[dict(text=f"{default_prob:.1f}%", x=0.5, y=0.5, font_size=28, showarrow=False)],
-                )
-                st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+                    fig = go.Figure(data=[go.Pie(
+                        values=[default_prob, 100 - default_prob], hole=0.75,
+                        marker_colors=[risk_color, "rgba(128, 128, 128, 0.2)"],
+                        textinfo="none", hoverinfo="none", direction="clockwise", sort=False,
+                    )])
+                    fig.update_layout(
+                        showlegend=False, height=130, margin=dict(t=0, b=0, l=0, r=0),
+                        annotations=[dict(text=f"{default_prob:.1f}%", x=0.5, y=0.5, font_size=28, showarrow=False)],
+                    )
+                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
 
-                st.markdown(
-                    f'<div class="risk-tag-container"><span class="risk-tag" style="color:{risk_color}; background-color:{risk_color}20;">{risk_tag}</span></div>',
-                    unsafe_allow_html=True,
-                )
+                    st.markdown(
+                        f'<div class="risk-tag-container"><span class="risk-tag" style="color:{risk_color}; background-color:{risk_color}20;">{risk_tag}</span></div>',
+                        unsafe_allow_html=True,
+                    )
 
-                # Collapsed Baselines (Space Saver)
-                with st.expander("ℹ️ View Score Baselines", expanded=False):
-                    st.markdown("""
-                        <div class="baseline-container">
-                            <div class="baseline-banner b-low"><div class="baseline-left"><div class="baseline-dot bg-green"></div><span class="baseline-title c-green">Low Risk</span></div><span class="baseline-threshold c-green">&lt; 40%</span></div>
-                            <div class="baseline-banner b-mod"><div class="baseline-left"><div class="baseline-dot bg-orange"></div><span class="baseline-title c-orange">Moderate Risk</span></div><span class="baseline-threshold c-orange">40–70%</span></div>
-                            <div class="baseline-banner b-high"><div class="baseline-left"><div class="baseline-dot bg-red"></div><span class="baseline-title c-red">High Risk</span></div><span class="baseline-threshold c-red">&gt; 70%</span></div>
-                        </div>
-                    """, unsafe_allow_html=True)
+                # Collapsed Baselines (Space Saver) - only show if not Thin File
+                if not is_new:
+                    with st.expander("ℹ️ View Score Baselines", expanded=False):
+                        low_t = st.session_state["low_risk_threshold"]
+                        high_t = st.session_state["high_risk_threshold"]
+                        st.markdown(f"""
+                            <div class="baseline-container">
+                                <div class="baseline-banner b-low"><div class="baseline-left"><div class="baseline-dot bg-green"></div><span class="baseline-title c-green">Low Risk</span></div><span class="baseline-threshold c-green">&lt; {low_t}%</span></div>
+                                <div class="baseline-banner b-mod"><div class="baseline-left"><div class="baseline-dot bg-orange"></div><span class="baseline-title c-orange">Moderate Risk</span></div><span class="baseline-threshold c-orange">{low_t}–{high_t}%</span></div>
+                                <div class="baseline-banner b-high"><div class="baseline-left"><div class="baseline-dot bg-red"></div><span class="baseline-title c-red">High Risk</span></div><span class="baseline-threshold c-red">&gt; {high_t}%</span></div>
+                            </div>
+                        """, unsafe_allow_html=True)
 
             with st.container(border=True):
                 st.markdown("<h3 class='decision-title'>Decision Workflow</h3>", unsafe_allow_html=True)
+                
+                if is_new:
+                    st.info("ℹ️ Manual review and decision required for Thin File applicants. Use demographic data and initial credit limit to assess creditworthiness.")
                 
                 justification_note = st.text_area(
                     "Operator Justification",
@@ -518,7 +549,7 @@ if page == "Applicant Assessment":
                         "Reject",
                         use_container_width=True,
                         on_click=submit_decision,
-                        args=(selected_id, "Rejected", id_col, default_prob, risk_tag, app_data, justification_note),
+                        args=(selected_id, "Rejected", id_col, default_prob if default_prob is not None else 0, risk_tag, app_data, justification_note),
                     )
                 with action_col2:
                     st.markdown("<span class='approve-marker'></span>", unsafe_allow_html=True)
@@ -526,7 +557,7 @@ if page == "Applicant Assessment":
                         "Approve",
                         use_container_width=True,
                         on_click=submit_decision,
-                        args=(selected_id, "Approved", id_col, default_prob, risk_tag, app_data, justification_note),
+                        args=(selected_id, "Approved", id_col, default_prob if default_prob is not None else 0, risk_tag, app_data, justification_note),
                     )
 
 
@@ -950,7 +981,7 @@ elif page == "Batch Analytics":
 elif page == "Engine Diagnostics":
     st.title("Engine Diagnostics")
     st.markdown(
-        "<p class='subtext'>Transparency and Explainable AI (XAI) for the core prediction engine.</p>",
+        "<p class='subtext'>Transparency and Analysis for the core prediction engine.</p>",
         unsafe_allow_html=True,
     )
     st.markdown("<hr/>", unsafe_allow_html=True)
@@ -1048,3 +1079,110 @@ elif page == "Engine Diagnostics":
             yaxis=dict(showgrid=False, tickfont=dict(size=14)),
         )
         st.plotly_chart(fig_cm, use_container_width=True, config=PLOTLY_CONFIG)
+
+    # --- Dynamic Threshold Adjustment ---
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.subheader("Risk Threshold Configuration")
+    st.markdown(
+        "<p class='history-desc'>Dynamically adjust the probability thresholds that determine risk tiers. "
+        "Lower thresholds = stricter (fewer approvals), Higher thresholds = lenient (more approvals).</p>",
+        unsafe_allow_html=True,
+    )
+
+    threshold_col1, threshold_col2 = st.columns([1, 1], gap="large")
+
+    with threshold_col1:
+        with st.container(border=True):
+            st.markdown("<p class='section-title'>Adjust Thresholds</p>", unsafe_allow_html=True)
+            
+            new_low = st.slider(
+                "LOW RISK Upper Bound",
+                min_value=0,
+                max_value=100,
+                value=st.session_state["low_risk_threshold"],
+                step=1,
+                help="Default: 40%. Applicants below this score are classified as LOW RISK."
+            )
+            
+            new_high = st.slider(
+                "MODERATE RISK Upper Bound",
+                min_value=0,
+                max_value=100,
+                value=st.session_state["high_risk_threshold"],
+                step=1,
+                help="Default: 70%. Applicants below this score are classified as MODERATE RISK. Above = HIGH RISK."
+            )
+            
+            # Validation: ensure thresholds are in proper order
+            if new_low >= new_high:
+                st.error("⚠️ LOW RISK threshold must be less than MODERATE RISK threshold!")
+            else:
+                # Update session state
+                st.session_state["low_risk_threshold"] = new_low
+                st.session_state["high_risk_threshold"] = new_high
+                
+                st.success(f"✅ Thresholds Updated: LOW < {new_low}% | MODERATE {new_low}-{new_high}% | HIGH > {new_high}%")
+                
+                # Reset to defaults button
+                if st.button("Reset to Default Thresholds (40 / 70)", use_container_width=True):
+                    st.session_state["low_risk_threshold"] = 40
+                    st.session_state["high_risk_threshold"] = 70
+                    st.rerun()
+
+    with threshold_col2:
+        with st.container(border=True):
+            st.markdown("<p class='section-title'>Threshold Impact</p>", unsafe_allow_html=True)
+            
+            # Calculate impact if dataset is loaded
+            if st.session_state["dataset"] is not None:
+                df = st.session_state["dataset"]
+                id_col = st.session_state.get("id_column", None)
+                
+                if id_col and id_col in df.columns:
+                    # Generate predictions for all applicants (excluding Thin Files)
+                    predictions = []
+                    for idx, row in df.iterrows():
+                        is_new = is_new_applicant_flag(row.get("IS_NEW_APPLICANT", "False"))
+                        if not is_new:  # Skip Thin Files
+                            try:
+                                pred = mu.process_and_predict(row, rf_model, yj_transformer)
+                                predictions.append(pred)
+                            except:
+                                pass
+                    
+                    if predictions:
+                        predictions = np.array(predictions)
+                        low_t = st.session_state["low_risk_threshold"]
+                        high_t = st.session_state["high_risk_threshold"]
+                        
+                        low_count = np.sum(predictions < low_t)
+                        mod_count = np.sum((predictions >= low_t) & (predictions <= high_t))
+                        high_count = np.sum(predictions > high_t)
+                        total = len(predictions)
+                        
+                        st.markdown(f"""
+                            <div class='profile-item'>
+                                <span class='profile-label'>LOW RISK<br></span>
+                                <span class='profile-value' style='color: #22c55e;'>{low_count} / {total} ({100*low_count/total:.1f}%)</span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        
+                        st.markdown(f"""
+                            <div class='profile-item'>
+                                <span class='profile-label'>MODERATE RISK<br></span>
+                                <span class='profile-value' style='color: #eab308;'>{mod_count} / {total} ({100*mod_count/total:.1f}%)</span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        
+                        st.markdown(f"""
+                            <div class='profile-item'>
+                                <span class='profile-label'>HIGH RISK<br></span>
+                                <span class='profile-value' style='color: #ef4444;'>{high_count} / {total} ({100*high_count/total:.1f}%)</span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.info("No valid predictions available in dataset.")
+                else:
+                    st.info("Load a dataset to see threshold impact.")
+            else:
+                st.info("📊 Load a dataset in 'Applicant Assessment' to see how thresholds affect classification.")

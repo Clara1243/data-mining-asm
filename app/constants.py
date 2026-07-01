@@ -45,11 +45,31 @@ RISK_TIER_COLORS = {
 }
 
 
-def classify_risk(default_prob: float) -> tuple[str, str]:
-    """Maps a default probability (0-100) to a (label, color) risk tier."""
-    if default_prob < 40:
+def classify_risk(
+    default_prob: float,
+    low_threshold: float = 40,
+    high_threshold: float = 70
+) -> tuple[str, str]:
+    """
+    Maps a default probability (0-100) to a (label, color) risk tier.
+    
+    Parameters
+    ----------
+    default_prob : float
+        Predicted default probability (0-100)
+    low_threshold : float
+        Upper bound for LOW RISK (default: 40)
+    high_threshold : float
+        Upper bound for MODERATE RISK (default: 70)
+    
+    Returns
+    -------
+    tuple[str, str]
+        (risk_label, risk_color)
+    """
+    if default_prob < low_threshold:
         label = "LOW RISK"
-    elif default_prob <= 70:
+    elif default_prob <= high_threshold:
         label = "MODERATE RISK"
     else:
         label = "HIGH RISK"
