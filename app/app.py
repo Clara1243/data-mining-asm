@@ -479,50 +479,36 @@ if page == "Applicant Assessment":
             st.subheader("Model Assessment")
 
             with st.container(border=True):
-                if is_new:
-                    # Thin File: Skip model prediction
-                    st.markdown(
-                        "<div style='text-align: center; padding: 20px;'>"
-                        "<h3 style='color: #f59e0b; font-weight: 600;'>Prediction Not Applicable</h3>"
-                        "<p style='color: #6b7280; font-size: 0.9rem;'>Insufficient credit history available for automated risk assessment.</p>"
-                        "</div>",
-                        unsafe_allow_html=True,
-                    )
+                try:
+                    default_prob = mu.process_and_predict(app_data, rf_model, yj_transformer)
+                except Exception as exc:
                     default_prob = None
-                    risk_tag = "NOT APPLICABLE"
-                    risk_color = "#f59e0b"  # amber color
+                    st.warning(f"Prediction could not be generated for this applicant: {exc}")
+
+                risk_tag, risk_color = classify_risk(
+                    default_prob,
+                    st.session_state["low_risk_threshold"],
+                    st.session_state["high_risk_threshold"],
+                )
+
+                if default_prob is None:
+                    st.info("Model score unavailable; manual review required.")
                 else:
-                    # Standard prediction
-                    try:
-                        default_prob = mu.process_and_predict(app_data, rf_model, yj_transformer)
-                    except Exception as exc:
-                        default_prob = None
-                        st.warning(f"Prediction could not be generated for this applicant: {exc}")
-
-                    risk_tag, risk_color = classify_risk(
-                        default_prob,
-                        st.session_state["low_risk_threshold"],
-                        st.session_state["high_risk_threshold"]
+                    fig = go.Figure(data=[go.Pie(
+                        values=[default_prob, 100 - default_prob], hole=0.75,
+                        marker_colors=[risk_color, "rgba(128, 128, 128, 0.2)"],
+                        textinfo="none", hoverinfo="none", direction="clockwise", sort=False,
+                    )])
+                    fig.update_layout(
+                        showlegend=False, height=130, margin=dict(t=0, b=0, l=0, r=0),
+                        annotations=[dict(text=f"{default_prob:.1f}%", x=0.5, y=0.5, font_size=28, showarrow=False)],
                     )
+                    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
 
-                    if default_prob is None:
-                        st.info("Model score unavailable; manual review required.")
-                    else:
-                        fig = go.Figure(data=[go.Pie(
-                            values=[default_prob, 100 - default_prob], hole=0.75,
-                            marker_colors=[risk_color, "rgba(128, 128, 128, 0.2)"],
-                            textinfo="none", hoverinfo="none", direction="clockwise", sort=False,
-                        )])
-                        fig.update_layout(
-                            showlegend=False, height=130, margin=dict(t=0, b=0, l=0, r=0),
-                            annotations=[dict(text=f"{default_prob:.1f}%", x=0.5, y=0.5, font_size=28, showarrow=False)],
-                        )
-                        st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
-
-                    st.markdown(
-                        f'<div class="risk-tag-container"><span class="risk-tag" style="color:{risk_color}; background-color:{risk_color}20;">{risk_tag}</span></div>',
-                        unsafe_allow_html=True,
-                    )
+                st.markdown(
+                    f'<div class="risk-tag-container"><span class="risk-tag" style="color:{risk_color}; background-color:{risk_color}20;">{risk_tag}</span></div>',
+                    unsafe_allow_html=True,
+                )
 
                 # Collapsed Baselines (Space Saver) - only show if not Thin File
                 if not is_new:
