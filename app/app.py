@@ -216,7 +216,7 @@ if page == "Applicant Assessment":
         st.title("Individual Applicant Assessment")
 
     with header_col2:
-        with st.popover("📁 Bulk Upload Application", use_container_width=True):
+        with st.popover("Upload Application", use_container_width=True):
 
             # --- Template generator ---
             st.markdown("**1. Download Application Template**")
@@ -448,7 +448,7 @@ if page == "Applicant Assessment":
                     ))
                     fig_trend.update_layout(
                         **BASE_LAYOUT,
-                        height=190,
+                        height=140,
                         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
                         yaxis=dict(gridcolor="rgba(128, 128, 128, 0.2)", tickprefix="$"),
                         xaxis=dict(showgrid=False),
@@ -478,7 +478,7 @@ if page == "Applicant Assessment":
                         ))
                         fig_factors.update_layout(
                             **BASE_LAYOUT,
-                            height=180,
+                            height=150,
                             xaxis=dict(showgrid=True, gridcolor="rgba(128, 128, 128, 0.2)", zeroline=True, zerolinecolor="rgba(128, 128, 128, 0.5)"),
                             yaxis=dict(showgrid=False),
                         )
@@ -522,8 +522,8 @@ if page == "Applicant Assessment":
                             textinfo="none", hoverinfo="none", direction="clockwise", sort=False,
                         )])
                         fig.update_layout(
-                            showlegend=False, height=110, margin=dict(t=0, b=0, l=0, r=0),
-                            annotations=[dict(text=f"{default_prob:.1f}%", x=0.5, y=0.5, font_size=28, showarrow=False)],
+                            showlegend=False, height=90, margin=dict(t=0, b=0, l=0, r=0),
+                            annotations=[dict(text=f"{default_prob:.1f}%", x=0.5, y=0.5, font_size=24, showarrow=False)],
                         )
                         st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
 
@@ -555,7 +555,7 @@ if page == "Applicant Assessment":
                     "Operator Justification",
                     placeholder="Required for manual overrides...",
                     key=f"just_{selected_id}",
-                    height=68
+                    height=50
                 )
 
                 action_col1, action_col2 = st.columns(2)
