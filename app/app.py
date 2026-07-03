@@ -998,20 +998,31 @@ elif page == "Batch Analytics":
 elif page == "Engine Diagnostics":
     st.title("Engine Diagnostics")
     st.markdown(
-        "<p class='subtext'>Transparency and Analysis for the core prediction engine.</p>",
+        "<p class='subtext'>Transparency and live introspection of the champion prediction engine.</p>",
         unsafe_allow_html=True,
     )
     st.markdown("<hr/>", unsafe_allow_html=True)
 
+    # All data on this page is derived from the loaded champion model — nothing hardcoded.
+    pipeline_info = mu.get_pipeline_description(rf_model)
+    params        = mu.get_model_params(rf_model)
+    kpis, cm = mu.get_model_metrics()
+    importance_df = mu.get_global_feature_importance(rf_model)
+
     col1, col2 = st.columns([1, 2], gap="large")
 
+    # ---- Left column: Architecture + Hyperparameters ----
     with col1:
         st.subheader("Model Architecture")
-        st.info("**Pipeline:** Yeo-Johnson Transformer ➔ Random Forest Classifier")
+
+        # Build the pipeline description from actual steps, not a hardcoded string
+        steps_label = " ➔ ".join(pipeline_info["steps"])
+        n_feat = pipeline_info["n_features"]
+        feat_label = f"{n_feat} features" if n_feat else "unknown feature count"
+        st.info(f"**Pipeline:** {steps_label}  \n**Trained on:** {feat_label}")
 
         with st.container(border=True):
             st.markdown("<p class='section-title'>Hyperparameters</p>", unsafe_allow_html=True)
-            params = mu.get_model_params(rf_model)
 
             for key, val in params.items():
                 st.markdown(
@@ -1022,17 +1033,16 @@ elif page == "Engine Diagnostics":
                     unsafe_allow_html=True,
                 )
 
+    # ---- Right column: Feature Importance ----
     with col2:
         st.subheader("Global Feature Importance")
         with st.container(border=True):
             st.markdown("<p class='section-title'>Top 10 Drivers of Default Risk</p>", unsafe_allow_html=True)
             st.markdown(
-                "<p class='history-desc'>This chart displays the most influential variables "
-                "the algorithm uses to evaluate risk across the entire applicant population.</p>",
+                "<p class='history-desc'>Mean decrease in impurity across all trees in the champion "
+                "Random Forest, read directly from the loaded pipeline.</p>",
                 unsafe_allow_html=True,
             )
-
-            importance_df = mu.get_global_feature_importance(rf_model)
 
             fig_global = go.Figure(go.Bar(
                 x=importance_df["Importance"],
@@ -1047,22 +1057,20 @@ elif page == "Engine Diagnostics":
                 xaxis=dict(
                     showgrid=True,
                     gridcolor="rgba(128, 128, 128, 0.2)",
-                    title="Relative Importance Weight",
+                    title="Mean Decrease in Impurity (MDI)",
                 ),
                 yaxis=dict(showgrid=False),
             )
             st.plotly_chart(fig_global, use_container_width=True, config=PLOTLY_CONFIG)
 
-    # --- Performance metrics ---
+    # ---- Performance Metrics ----
     st.markdown("<br>", unsafe_allow_html=True)
-    st.subheader("Model Performance (Threat Matrix)")
+    st.subheader("Model Performance")
     st.markdown(
         "<p class='history-desc'>Evaluating the engine's ability to balance False Positives "
-        "(lost revenue) against False Negatives (financial loss) on the testing dataset.</p>",
+        "(lost revenue) against False Negatives (financial loss) on the held-out test set.</p>",
         unsafe_allow_html=True,
     )
-
-    kpis, cm = mu.get_model_metrics()
 
     st.markdown(f"""
         <div class="kpi-grid">
@@ -1076,7 +1084,7 @@ elif page == "Engine Diagnostics":
     with st.container(border=True):
         st.markdown("<p class='section-title'>Confusion Matrix</p>", unsafe_allow_html=True)
 
-        z_data = [cm[1], cm[0]]   # [[FN, TP], [TN, FP]] for heatmap orientation
+        z_data = [cm[1], cm[0]]  # [[FN, TP], [TN, FP]] for heatmap orientation
 
         fig_cm = go.Figure(data=go.Heatmap(
             z=z_data,

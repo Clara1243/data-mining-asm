@@ -225,41 +225,102 @@ def get_global_feature_importance(rf_model):
 # Model introspection helpers
 # ---------------------------------------------------------------------------
 
+def get_pipeline_description(rf_model) -> dict:
+    """
+    Derives the pipeline architecture from the loaded champion model rather
+    than relying on a hardcoded string in the UI.
+
+    Returns
+    -------
+    dict with keys:
+      steps       : list[str]  – human-readable step names in order
+      step_types  : list[str]  – actual class names
+      n_features  : int | None – number of features the estimator was trained on
+      estimator_type : str     – class name of the final estimator
+    """
+    if hasattr(rf_model, "steps"):
+        steps = []
+        step_types = []
+        for name, obj in rf_model.steps:
+            cls = type(obj).__name__
+            step_types.append(cls)
+            # Map sklearn class names to readable labels
+            label = {
+                "PowerTransformer": "Yeo-Johnson Power Transformer",
+                "StandardScaler": "Standard Scaler",
+                "MinMaxScaler": "Min-Max Scaler",
+                "RandomForestClassifier": "Random Forest Classifier",
+                "GradientBoostingClassifier": "Gradient Boosting Classifier",
+                "LogisticRegression": "Logistic Regression",
+                "ColumnTransformer": "Column Transformer",
+            }.get(cls, cls)
+            steps.append(label)
+        estimator = rf_model.steps[-1][1]
+        estimator_type = type(estimator).__name__
+    else:
+        steps = [type(rf_model).__name__]
+        step_types = steps[:]
+        estimator = rf_model
+        estimator_type = type(rf_model).__name__
+
+    n_features = (
+        len(estimator.feature_names_in_)
+        if hasattr(estimator, "feature_names_in_")
+        else getattr(estimator, "n_features_in_", None)
+    )
+
+    return {
+        "steps": steps,
+        "step_types": step_types,
+        "n_features": n_features,
+        "estimator_type": estimator_type,
+    }
+
+
 def get_model_params(rf_model):
-    """Returns a dict of core hyperparameters for the RF estimator."""
+    """
+    Introspects the champion pipeline to return its actual hyperparameters.
+    Every value is read directly from the loaded estimator — nothing is hardcoded.
+    """
     estimator = rf_model.steps[-1][1] if hasattr(rf_model, "steps") else rf_model
     params = estimator.get_params()
 
+    max_depth = params.get("max_depth", None)
+
     return {
         "Number of Estimators (Trees)": params.get("n_estimators", "N/A"),
-        "Max Depth": params.get("max_depth", "None (Unlimited)"),
+        "Max Depth": max_depth if max_depth is not None else "None (Unlimited)",
         "Min Samples Split": params.get("min_samples_split", "N/A"),
+        "Min Samples Leaf": params.get("min_samples_leaf", "N/A"),
+        "Max Features": params.get("max_features", "N/A"),
         "Criterion": str(params.get("criterion", "N/A")).capitalize(),
+        "Bootstrap": params.get("bootstrap", "N/A"),
+        "Class Weight": str(params.get("class_weight", "None")),
+        "Random State": params.get("random_state", "N/A"),
     }
+
 
 
 def get_model_metrics():
     """
-    Returns static KPIs and a confusion matrix from the model's test phase.
-    Update these values to match your final Jupyter Notebook output.
+    Test-set evaluation metrics for the champion Random Forest (Figure 20).
+    KPIs are weighted averages across both classes by support.
 
     Returns
     -------
-    kpis : dict
+    kpis : dict  – {"Accuracy": str, "Precision": str, "Recall": str, "F1-Score": str}
     cm   : list[list[int]]  – [[TN, FP], [FN, TP]]
     """
     kpis = {
-        "Accuracy": "82.4%",
-        "Precision": "76.1%",
-        "Recall": "68.3%",
-        "F1-Score": "72.0%",
+        "Accuracy":  "79.2%",
+        "Precision": "79.5%",
+        "Recall":    "78.9%",
+        "F1-Score":  "79.5%",
     }
-
     cm = [
-        [4200, 350],   # Actual Paid (0)    → [TN, FP]
-        [600, 850],    # Actual Default (1) → [FN, TP]
+        [4035, 632],  # Actual Paid (0)    → [TN, FP]
+        [612,  714],  # Actual Default (1) → [FN, TP]
     ]
-
     return kpis, cm
 
 
