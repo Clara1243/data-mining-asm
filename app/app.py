@@ -1172,54 +1172,79 @@ elif page == "Engine Diagnostics":
     with threshold_col2:
         with st.container(border=True):
             st.markdown("<p class='section-title'>Threshold Impact</p>", unsafe_allow_html=True)
-            
-            # Calculate impact if dataset is loaded
+
             if st.session_state["dataset"] is not None:
                 df = st.session_state["dataset"]
                 id_col = st.session_state.get("id_column", None)
-                
+
                 if id_col and id_col in df.columns:
-                    # Generate predictions for all applicants (excluding Thin Files)
                     predictions = []
+                    thin_file_count = 0
+                    failed_count = 0
+
                     for idx, row in df.iterrows():
                         is_new = is_new_applicant_flag(row.get("IS_NEW_APPLICANT", "False"))
-                        if not is_new:  # Skip Thin Files
-                            try:
-                                pred = mu.process_and_predict(row, rf_model, yj_transformer)
-                                predictions.append(pred)
-                            except:
-                                pass
-                    
+                        if is_new:
+                            thin_file_count += 1
+                            continue
+                        try:
+                            pred = mu.process_and_predict(row, rf_model, yj_transformer)
+                            predictions.append(pred)
+                        except Exception:
+                            failed_count += 1
+
+                    total_in_dataset = len(df)
+                    scoreable = len(predictions)
+
                     if predictions:
                         predictions = np.array(predictions)
                         low_t = st.session_state["low_risk_threshold"]
                         high_t = st.session_state["high_risk_threshold"]
-                        
-                        low_count = np.sum(predictions < low_t)
-                        mod_count = np.sum((predictions >= low_t) & (predictions <= high_t))
-                        high_count = np.sum(predictions > high_t)
-                        total = len(predictions)
-                        
+
+                        low_count  = int(np.sum(predictions < low_t))
+                        mod_count  = int(np.sum((predictions >= low_t) & (predictions <= high_t)))
+                        high_count = int(np.sum(predictions > high_t))
+
                         st.markdown(f"""
                             <div class='profile-item'>
-                                <span class='profile-label'>LOW RISK<br></span>
-                                <span class='profile-value' style='color: #22c55e;'>{low_count} / {total} ({100*low_count/total:.1f}%)</span>
+                                <span class='profile-label'>DATASET COVERAGE</span><br>
+                                <span class='profile-value'>{scoreable} / {total_in_dataset} scoreable</span>
                             </div>
                         """, unsafe_allow_html=True)
-                        
+
+                        if thin_file_count > 0:
+                            st.markdown(f"""
+                                <div class='profile-item'>
+                                    <span class='profile-label'>THIN FILES (unable to predict)</span><br>
+                                    <span class='profile-value' style='color: #eab308;'>{thin_file_count} record{"s" if thin_file_count != 1 else ""} excluded — no payment history</span>
+                                </div>
+                            """, unsafe_allow_html=True)
+
+                        if failed_count > 0:
+                            st.markdown(f"""
+                                <div class='profile-item'>
+                                    <span class='profile-label'>PREDICTION ERRORS</span><br>
+                                    <span class='profile-value' style='color: #ef4444;'>{failed_count} record{"s" if failed_count != 1 else ""} failed — check data quality</span>
+                                </div>
+                            """, unsafe_allow_html=True)
+
+                        st.markdown("<hr class='hr'/>", unsafe_allow_html=True)
+
                         st.markdown(f"""
                             <div class='profile-item'>
-                                <span class='profile-label'>MODERATE RISK<br></span>
-                                <span class='profile-value' style='color: #eab308;'>{mod_count} / {total} ({100*mod_count/total:.1f}%)</span>
+                                <span class='profile-label'>LOW RISK</span><br>
+                                <span class='profile-value' style='color: #22c55e;'>{low_count} / {scoreable} ({100*low_count/scoreable:.1f}%)</span>
                             </div>
-                        """, unsafe_allow_html=True)
-                        
-                        st.markdown(f"""
                             <div class='profile-item'>
-                                <span class='profile-label'>HIGH RISK<br></span>
-                                <span class='profile-value' style='color: #ef4444;'>{high_count} / {total} ({100*high_count/total:.1f}%)</span>
+                                <span class='profile-label'>MODERATE RISK</span><br>
+                                <span class='profile-value' style='color: #eab308;'>{mod_count} / {scoreable} ({100*mod_count/scoreable:.1f}%)</span>
+                            </div>
+                            <div class='profile-item'>
+                                <span class='profile-label'>HIGH RISK</span><br>
+                                <span class='profile-value' style='color: #ef4444;'>{high_count} / {scoreable} ({100*high_count/scoreable:.1f}%)</span>
                             </div>
                         """, unsafe_allow_html=True)
+
                     else:
                         st.info("No valid predictions available in dataset.")
                 else:
