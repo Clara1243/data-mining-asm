@@ -93,6 +93,15 @@ if "high_risk_threshold" not in st.session_state:
 # Audit / decision helpers
 # ---------------------------------------------------------------------------
 
+def _safe_int(value, default: int = 0) -> int:
+    """Converts value to int, returning default for NaN, None, or non-numeric input."""
+    try:
+        numeric = pd.to_numeric(value, errors="coerce")
+        return default if pd.isna(numeric) else int(numeric)
+    except (TypeError, ValueError):
+        return default
+
+
 def submit_decision(
     app_id: str,
     decision: str,
@@ -112,7 +121,7 @@ def submit_decision(
     top_factors = factors.tail(3)["Feature"].tolist()
 
     frozen_history = {
-        col: int(raw_data.get(col, 0))
+        col: _safe_int(raw_data.get(col, 0))
         for col in PAY_COLS
         if col in raw_data
     }
@@ -623,17 +632,23 @@ elif page == "Applicant Archive":
                 filter_option = st.radio(
                     "Filter Applications:",
                     options=[
-                        "All Records", 
-                        "Overrides Only", 
-                        "High-Risk Approvals", 
-                        "Low-Risk Rejections"
+                        "All Records",
+                        "Approved Only",
+                        "Rejected Only",
+                        "Overrides Only",
+                        "High-Risk Approvals",
+                        "Low-Risk Rejections",
                     ],
                     horizontal=True,
                     label_visibility="collapsed"
                 )
 
             # 2. Apply Filters
-            if filter_option == "Overrides Only":
+            if filter_option == "Approved Only":
+                summary_df = summary_df[summary_df["Final Decision"] == "Approved"]
+            elif filter_option == "Rejected Only":
+                summary_df = summary_df[summary_df["Final Decision"] == "Rejected"]
+            elif filter_option == "Overrides Only":
                 summary_df = summary_df[summary_df["Is_Override_Raw"]]
             elif filter_option == "High-Risk Approvals":
                 summary_df = summary_df[(summary_df["Final Decision"] == "Approved") & (summary_df["Risk_Tier_Raw"] == "HIGH RISK")]
